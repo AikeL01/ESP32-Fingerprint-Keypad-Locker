@@ -2,7 +2,7 @@
 
 A secure and smart locker system built with **ESP32**, featuring **fingerprint authentication**, **keypad access**, and an **LCD display**. This project combines biometric security with traditional password-based access, providing a versatile and reliable solution for secure storage or door access.
 
-<img src="preview-locker.png" alt="Locker Preview" style="border-radius: 15px;">
+<img src="preview-locker.jpg" alt="Locker Preview" style="border-radius: 15px;">
 ---
 
 ## Features
