@@ -27,7 +27,7 @@ A secure electronic locking system that combines fingerprint recognition and PIN
 - 5V Relay Module
 - Piezo Buzzer
 - Power Supply (5V)
-- Jumper Wires
+- Jumper Wires/Solid wires
 - Electronic Lock Mechanism (Solenoid/Motor)
 
 ## Wiring Connections
