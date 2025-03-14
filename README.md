@@ -6,8 +6,8 @@ A secure and smart locker system built with **ESP32**, featuring **fingerprint a
 
 ## Features
 
-- **Fingerprint Authentication**: Uses a ZA620-M5 fingerprint sensor for biometric access.
-- **Keypad Access**: Supports password-based entry with a 4x4 keypad.
+- **Fingerprint Authentication**: Uses a AS608/ZA620-M5 fingerprint sensor for biometric access.
+- **Keypad Access**: Supports password-based entry with a 4x3/4 keypad.
 - **LCD Display**: Provides real-time feedback and system status on a 16x2 I2C LCD.
 - **Relay Control**: Controls a lock mechanism via a relay module.
 - **Inactivity Timeout**: Automatically turns off the LCD backlight after a period of inactivity.
@@ -19,8 +19,8 @@ A secure and smart locker system built with **ESP32**, featuring **fingerprint a
 ## Hardware Components
 
 - **ESP32 Microcontroller**
-- **ZA620-M5 Fingerprint Sensor**
-- **4x4 Matrix Keypad**
+- **AS608/ZA620-M5 Fingerprint Sensor**
+- **4x3/4 Matrix Keypad**
 - **16x2 I2C LCD Display**
 - **Relay Module**
 - **Piezo Buzzer**
