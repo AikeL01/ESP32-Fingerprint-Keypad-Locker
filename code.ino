@@ -24,7 +24,7 @@ byte unlockChar[8] = { 0b01110, 0b10000, 0b10000, 0b11111, 0b11011, 0b11011, 0b1
 byte fingerChar[8] = { 0b00000, 0b00000, 0b01110, 0b11111, 0b11111, 0b11111, 0b01110, 0b00000 };
 
 // Keypad configuration
-const byte ROWS = 4, COLS = 4;
+const byte ROWS = 4, COLS = 3;
 char keys[ROWS][COLS] = { { '1', '2', '3' }, { '4', '5', '6' }, { '7', '8', '9' }, { '*', '0', '#' } };
 byte rowPins[ROWS] = { 2, 0, 4, 5 };
 byte colPins[COLS] = { 18, 19, 23 };
