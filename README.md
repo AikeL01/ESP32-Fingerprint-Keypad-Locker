@@ -2,7 +2,9 @@
 
 A secure electronic locking system that combines fingerprint recognition and PIN code access using an ESP32 microcontroller, ZA620_M5 fingerprint sensor, and a keypad interface.
 
-![Biometric Locker System](images/preview.png)
+<div align="center">
+  <img src="images/preview.png" alt="Project Preview" width="600">
+</div>
 
 ## Features
 
