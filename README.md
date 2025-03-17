@@ -111,10 +111,6 @@ Send these commands via the Serial Monitor:
 - Modify the number of allowed attempts by changing `MAX_WRONG_ATTEMPTS`
 - Customize inactivity timeout with `INACTIVITY_TIMEOUT`
 
-## 🤝 Contributing
-
-Contributions are welcome! Please feel free to submit a Pull Request.
-
 ## 📜 License
 
 This project is licensed under the MIT License - see the LICENSE file for details.
@@ -122,8 +118,7 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 ## 🙏 Acknowledgements
 
 - Adafruit for their excellent fingerprint sensor library
-- Arduino community for continued support and inspiration
 
 ---
 
-Made with ❤️ by [Your Name]
+Made with ❤️ by Aikel01
