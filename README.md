@@ -1,102 +1,129 @@
-# ESP32 Biometric Locker System
+# 🔒 ESP32 Biometric Locker System
 
-A secure electronic locking system that combines fingerprint recognition and PIN code access using an ESP32 microcontroller, ZA620_M5 fingerprint sensor, and a keypad interface.
+A secure, reliable electronic locker system powered by ESP32 with fingerprint and keypad authentication.
 
-<div align="center">
-  <img src="images/preview.png" alt="Project Preview" width="600">
-</div>
+![Locker System](https://raw.githubusercontent.com/AikeL01/ESP32-Fingerprint-Keypad-Locker/refs/heads/main/images/preview.png)
 
-## Features
+## ✨ Features
 
-- **Dual Authentication Methods**: Access via fingerprint scan or 4-digit PIN code
-- **LCD Status Display**: Real-time feedback with custom icons
-- **Security Measures**: 
-  - Lockout mechanism after 5 incorrect password attempts
-  - Auto backlight timeout after 10 seconds of inactivity
-  - PIN masking for privacy
-- **Audible Feedback**: Different buzzer patterns for various events
-- **Serial Management Interface**: Enroll or delete fingerprints via serial commands
-- **Power-Efficient**: Automatic LCD backlight control
+- **Dual Authentication**: Fingerprint sensor (ZA620_M5) and keypad options
+- **LCD Display**: Real-time status and feedback via I2C LCD
+- **Security Features**: 
+  - Lockout after multiple failed attempts
+  - Auto-dimming display to save power
+  - Masked password input
+- **Audible Feedback**: Different sound patterns for various actions
+- **Serial Management**: Enroll/delete fingerprints via serial commands
 
-## Hardware Requirements
+## 🛠️ Hardware
 
-- ESP32 Development Board
-- ZA620_M5 Fingerprint Sensor
-- 4x3 Matrix Keypad
-- 16x2 I2C LCD Display (I2C address 0x27)
-- 5V Relay Module
-- Piezo Buzzer
-- Power Supply (5V)
-- Jumper Wires/Solid wires
-- Electronic Lock Mechanism (Solenoid/Motor)
+- ESP32 development board
+- ZA620_M5 fingerprint sensor
+- 4x3 keypad matrix
+- 16x2 I2C LCD display
+- Relay module for lock control
+- Piezo buzzer for audio feedback
 
-## Wiring Connections
+## 📋 Pin Configuration
 
-| Component | Pin Connection |
-|-----------|---------------|
-| **Fingerprint Sensor** | RX → ESP32 GPIO16<br>TX → ESP32 GPIO17 |
-| **I2C LCD** | SDA → ESP32 SDA (21)<br>SCL → ESP32 SCL (22) |
-| **Keypad** | Row Pins → ESP32 GPIO2, GPIO0, GPIO4, GPIO5<br>Column Pins → ESP32 GPIO18, GPIO19, GPIO23 |
-| **Relay** | Signal → ESP32 GPIO26 |
-| **Buzzer** | Positive → ESP32 GPIO15 |
+| Component | Pins |
+|-----------|------|
+| Relay | GPIO26 |
+| Fingerprint RX/TX | GPIO16/GPIO17 |
+| Buzzer | GPIO15 |
+| Keypad Rows | GPIO2, GPIO0, GPIO4, GPIO5 |
+| Keypad Columns | GPIO18, GPIO19, GPIO23 |
+| LCD | I2C (SDA/SCL default pins) |
 
-## Installation
+## 🚀 Setup Instructions
 
-1. Install the following libraries using the Arduino Library Manager:
-   - Adafruit Fingerprint Sensor Library
-   - Keypad
-   - LiquidCrystal I2C
+1. Connect all components according to the pin configuration
+2. Install the required libraries:
+   - Adafruit Fingerprint Library
+   - Keypad Library
+   - LiquidCrystal_I2C Library
+3. Upload the code to your ESP32
+4. Open the serial monitor at 115200 baud to view system status
 
-2. Connect the hardware components according to the wiring diagram.
+## 💻 Usage
 
-3. Upload the code to your ESP32 using the Arduino IDE.
+### Unlock Methods
 
-4. Open the Serial Monitor at 115200 baud to interact with the system.
+- **Fingerprint**: Place registered finger on the sensor
+- **Keypad**: Enter the 4-digit PIN (default: 0000)
 
-## Usage
+### Management Commands
 
-### Normal Operation
-
-1. The system displays "Ready to unlock" when idle.
-2. To unlock using fingerprint: Place your finger on the sensor.
-3. To unlock using PIN: Enter the 4-digit code on the keypad.
-   - Default password: `0000`
-   - Press `*` to clear input
-   - Press `#` to confirm (or wait for auto-confirmation after 4 digits)
-
-### Administration
-
-Connect to the system via Serial Monitor (115200 baud) and use the following commands:
+Send these commands via the Serial Monitor:
 
 - `e` - Enroll a new fingerprint
-  - Follow the prompts to assign an ID and register a fingerprint
 - `d` - Delete a stored fingerprint
-  - Enter the ID of the fingerprint to delete
 
-## Security Features
+## 🔐 Security Features
 
-- **Lockout**: After 5 failed password attempts, the system locks for 30 seconds
-- **Activity Timeout**: LCD backlight turns off after 10 seconds of inactivity
-- **Input Masking**: Password digits are displayed as asterisks
-- **Hardware Security**: Uses secure communications with the fingerprint sensor
+- **Lockout System**: After 5 incorrect attempts, system locks for 30 seconds
+- **Inactivity Timeout**: Display backlight turns off after 10 seconds of inactivity
+- **Secure Input**: Password input is masked on the display
 
-## Customization
+## 🧩 System Workflow
 
-- Change the default PIN by modifying `const String DEFAULT_PASSWORD = "0000";`
-- Adjust lockout duration by changing `const unsigned long LOCKOUT_DURATION = 30000;`
-- Modify the inactivity timeout period with `const unsigned long INACTIVITY_TIMEOUT = 10000;`
+```
+         ┌─────────────────┐
+         │  System Ready   │
+         └────────┬────────┘
+                  │
+         ┌────────▼────────┐
+         │  Authentication │
+         └────────┬────────┘
+                  │
+        ┌─────────┴─────────┐
+        │                   │
+┌───────▼───────┐   ┌───────▼───────┐
+│   Fingerprint  │   │     Keypad    │
+└───────┬───────┘   └───────┬───────┘
+        │                   │
+        │                   │
+┌───────▼───────┐   ┌───────▼───────┐
+│  Image Match?  │   │ Correct PIN?  │
+└───────┬───────┘   └───────┬───────┘
+        │                   │
+        └─────────┬─────────┘
+                  │
+        ┌─────────▼─────────┐
+        │   Access Granted  │◄─────Yes
+        └─────────┬─────────┘
+                  │
+         ┌────────▼────────┐
+         │ Unlock for 3sec │
+         └────────┬────────┘
+                  │
+         ┌────────▼────────┐
+         │   Lock Again    │
+         └────────┬────────┘
+                  │
+                  ▼
+```
 
-## Troubleshooting
+## 📝 Customization
 
-- **Fingerprint Sensor Not Connecting**: The code attempts to use an alternate password if the default doesn't work
-- **LCD Not Displaying**: Check the I2C address (default is 0x27)
-- **Relay Not Triggering**: Note that the code uses reversed logic (HIGH = locked)
+- Change the default password by modifying `DEFAULT_PASSWORD`
+- Adjust the lockout duration by changing `LOCKOUT_DURATION`
+- Modify the number of allowed attempts by changing `MAX_WRONG_ATTEMPTS`
+- Customize inactivity timeout with `INACTIVITY_TIMEOUT`
 
-## License
+## 🤝 Contributing
+
+Contributions are welcome! Please feel free to submit a Pull Request.
+
+## 📜 License
 
 This project is licensed under the MIT License - see the LICENSE file for details.
 
-## Acknowledgments
+## 🙏 Acknowledgements
 
-- Adafruit for their Fingerprint Sensor Library
-- Arduino community for various library contributions
+- Adafruit for their excellent fingerprint sensor library
+- Arduino community for continued support and inspiration
+
+---
+
+Made with ❤️ by [Your Name]
