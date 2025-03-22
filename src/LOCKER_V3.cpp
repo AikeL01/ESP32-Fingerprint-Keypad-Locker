@@ -43,6 +43,11 @@ const unsigned long LOCKOUT_DURATION = 30000;  // 30 seconds lockout
 unsigned long lastActivityTime = 0;
 const unsigned long INACTIVITY_TIMEOUT = 10000;  // 10 seconds
 
+// Replace magic numbers with constants
+const int UNLOCK_DURATION = 3000;  // Door unlock duration in milliseconds
+const int BUZZER_SHORT_BEEP = 100;  // Short beep duration
+const int BUZZER_LONG_BEEP = 200;  // Long beep duration
+
 // Function declarations
 void showReadyScreen();
 void unlockDoor();
@@ -56,7 +61,7 @@ void activateLockoutMode();
 int getIDFromInput();
 void enrollFingerprint();
 void deleteFingerprint();
-String getInputFromKeypad(char confirmKey, char clearKey);
+String getInput(String prompt, char confirmKey, char clearKey);
 void setupPins();
 void setupLCD();
 void setupFingerprintSensor();
@@ -90,10 +95,11 @@ void loop() {
 
   handleSerialCommands();
   handleFingerprint();
-  handleKeypad();
+  handleKeypad();  // Ensure keypad is checked frequently
   handleInactivity();
 
-  delay(50);  // Short delay for stability
+  // Reduce delay for better responsiveness
+  delay(10);  // Shorter delay for improved keypad responsiveness
 }
 
 void setupPins() {
@@ -206,13 +212,14 @@ void handleFingerprint() {
 void handleKeypad() {
   char key = keypad.getKey();
   if (key) {
+    // Process key press immediately
     Serial.print("Key pressed: ");
     Serial.println(key);
 
     if (key == '*') {
       input_password = "";
       Serial.println("Input cleared");
-      displayMessage("Password:", "Cleared", 1000);
+      displayMessage("Password:", "Cleared", 500);  // Shorter delay for feedback
       showReadyScreen();
     } else if (key == '#') {
       checkPassword();
@@ -235,44 +242,43 @@ void handleInactivity() {
   }
 }
 
+// Optimize LCD updates in `displayMaskedInput`
 void displayMaskedInput() {
-  lcd.clear();
-  lcd.setCursor(0, 0);
-  lcd.print("Password:");
-  lcd.setCursor(0, 1);
-  for (int i = 0; i < input_password.length(); i++) {
-    lcd.print("*");
+  static String lastInput = "";
+  if (input_password != lastInput) {
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print("Password:");
+    lcd.setCursor(0, 1);
+    for (int i = 0; i < input_password.length(); i++) {
+      lcd.print("*");
+    }
+    lastInput = input_password;
   }
-
-  Serial.print("Current input: ");
-  for (int i = 0; i < input_password.length(); i++) {
-    Serial.print("*");
-  }
-  Serial.println();
 }
 
 // Buzzer patterns: 0=success, 1=error, 2=warning, 3=alarm
 void soundBuzzer(int pattern) {
   switch (pattern) {
     case 0:  // Success beep
-      tone(BUZZER_PIN, 1000, 100);
-      delay(100);
-      tone(BUZZER_PIN, 2000, 100);
+      tone(BUZZER_PIN, 1000, BUZZER_SHORT_BEEP);
+      delay(BUZZER_SHORT_BEEP);
+      tone(BUZZER_PIN, 2000, BUZZER_SHORT_BEEP);
       break;
     case 1:  // Error beep
-      tone(BUZZER_PIN, 300, 200);
+      tone(BUZZER_PIN, 300, BUZZER_LONG_BEEP);
       break;
     case 2:  // Warning beep
-      tone(BUZZER_PIN, 500, 100);
-      delay(100);
-      tone(BUZZER_PIN, 500, 100);
+      tone(BUZZER_PIN, 500, BUZZER_SHORT_BEEP);
+      delay(BUZZER_SHORT_BEEP);
+      tone(BUZZER_PIN, 500, BUZZER_SHORT_BEEP);
       break;
     case 3:  // Alarm
       for (int i = 0; i < 5; i++) {
-        tone(BUZZER_PIN, 800, 100);
-        delay(100);
-        tone(BUZZER_PIN, 600, 100);
-        delay(100);
+        tone(BUZZER_PIN, 800, BUZZER_SHORT_BEEP);
+        delay(BUZZER_SHORT_BEEP);
+        tone(BUZZER_PIN, 600, BUZZER_SHORT_BEEP);
+        delay(BUZZER_SHORT_BEEP);
       }
       break;
   }
@@ -331,14 +337,29 @@ uint8_t getFingerprintID() {
     Serial.println("Fingerprint not recognized");
     displayMessage("No Match Found", "Access Denied");
     soundBuzzer(1);  // Short error beep
-    delay(2000);
-    showReadyScreen();
+    
+    // Increment wrong attempts counter for failed fingerprint recognition
+    wrong_attempts++;
+    Serial.print("Wrong attempts: ");
+    Serial.print(wrong_attempts);
+    Serial.print(" of ");
+    Serial.println(MAX_WRONG_ATTEMPTS);
+    
+    // Check if maximum wrong attempts reached
+    if (wrong_attempts >= MAX_WRONG_ATTEMPTS) {
+      activateLockoutMode();
+    } else {
+      delay(2000);
+      showReadyScreen();
+    }
+    
     return 0;
   }
 
   return finger.fingerID;
 }
 
+// Update `unlockDoor` to use the new constant
 void unlockDoor() {
   Serial.println("Unlocking door...");
 
@@ -352,62 +373,48 @@ void unlockDoor() {
   digitalWrite(RELAY_PIN, LOW);  // Unlock
 
   // Countdown timer
-  for (int i = 3; i > 0; i--) {
-    lcd.setCursor(15, 1);
-    lcd.print(i);
-    delay(1000);
-  }
+  delay(UNLOCK_DURATION);
 
   digitalWrite(RELAY_PIN, HIGH);  // Lock
   Serial.println("Door locked");
 }
 
-// Utility function to get input from keypad until confirm key is pressed
-String getInputFromKeypad(char confirmKey, char clearKey) {
+// Refactored function to handle input from keypad or serial
+String getInput(String prompt, char confirmKey, char clearKey) {
   String input = "";
+  lcd.clear();
+  lcd.print(prompt);
+  lcd.setCursor(0, 1);
+
   while (true) {
     char key = keypad.getKey();
     if (key) {
-      Serial.print("Key pressed: ");
-      Serial.println(key);
-
-      if (key == confirmKey) {
-        break;
-      } else if (key == clearKey) {
+      if (key == confirmKey) break;
+      if (key == clearKey) {
         input = "";
-        Serial.println("Input cleared");
         lcd.setCursor(0, 1);
-        lcd.print("                ");
+        lcd.print("                ");  // Clear line
         lcd.setCursor(0, 1);
-        lcd.print("Enter current:");
       } else {
         input += key;
-        // Show masked input
-        lcd.setCursor(14, 1);
-        lcd.print("   ");
-        lcd.setCursor(14, 1);
-        lcd.print(input.length());
-
-        // Mask the input for security
-        Serial.print("Current input: ");
-        for (int i = 0; i < input.length(); i++) {
-          Serial.print("*");
-        }
-        Serial.println();
+        lcd.print("*");  // Mask input
       }
     }
 
-    // Also allow input from Serial for testing
     if (Serial.available()) {
-      String serialInput = Serial.readStringUntil('\n');
-      input = serialInput;
-      Serial.println(serialInput);
+      input = Serial.readStringUntil('\n');
       break;
     }
 
     delay(10);
   }
   return input;
+}
+
+// Refactor `getIDFromInput` to use the new `getInput` function
+int getIDFromInput() {
+  String idStr = getInput("Enter ID:", '#', '*');
+  return idStr.toInt();
 }
 
 void enrollFingerprint() {
@@ -541,40 +548,4 @@ void activateLockoutMode() {
   lockout_mode = true;
   lockout_start_time = millis();
   soundBuzzer(3);  // Long alarm pattern
-}
-
-// Get ID from keypad or serial input
-int getIDFromInput() {
-  int id = 0;
-  while (true) {
-    char key = keypad.getKey();
-    if (key) {
-      Serial.print("Key pressed: ");
-      Serial.println(key);
-
-      if (key == '#') break;
-      else if (key == '*') {
-        id = 0;
-        Serial.println("ID cleared");
-      } else if (isdigit(key)) {
-        id = id * 10 + (key - '0');
-        Serial.print("Current ID: ");
-        Serial.println(id);
-      }
-    }
-
-    if (Serial.available()) {
-      char c = Serial.read();
-      if (isdigit(c)) {
-        id = id * 10 + (c - '0');
-        Serial.print("Current ID: ");
-        Serial.println(id);
-      } else if (c == '\n' || c == '\r') {
-        break;
-      }
-    }
-
-    delay(10);
-  }
-  return id;
 }
