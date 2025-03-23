@@ -1,8 +1,8 @@
 #include <Arduino.h>
 #include <Adafruit_Fingerprint.h>
-#include <Keypad.h>
+#include <SimpleKeypad.h>  // Changed from Keypad.h
 #include <Wire.h>
-#include <LiquidCrystal_I2C.h>
+#include <LCD_I2C.h>
 
 // Pin and hardware setup
 #define RELAY_PIN 26       // ESP32 GPIO pin connected to relay
@@ -14,7 +14,7 @@
 #define LCD_ROWS 2         // LCD rows
 
 // Create hardware objects
-LiquidCrystal_I2C lcd(I2C_ADDR, LCD_COLS, LCD_ROWS);
+LCD_I2C lcd(I2C_ADDR, LCD_COLS, LCD_ROWS);  // Changed from LiquidCrystal_I2C to LCD_I2C
 HardwareSerial fingerprintSerial(2);  // Using ESP32's Hardware Serial 2
 Adafruit_Fingerprint finger = Adafruit_Fingerprint(&fingerprintSerial);
 
@@ -25,10 +25,10 @@ byte fingerChar[8] = { 0b00000, 0b00000, 0b01110, 0b11111, 0b11111, 0b11111, 0b0
 
 // Keypad configuration
 const byte ROWS = 4, COLS = 3;
-char keys[ROWS][COLS] = { { '1', '2', '3' }, { '4', '5', '6' }, { '7', '8', '9' }, { '*', '0', '#' } };
+char keys[ROWS * COLS] = { '1', '2', '3', '4', '5', '6', '7', '8', '9', '*', '0', '#' };
 byte rowPins[ROWS] = { 2, 0, 4, 5 };
 byte colPins[COLS] = { 18, 19, 23 };
-Keypad keypad = Keypad(makeKeymap(keys), rowPins, colPins, ROWS, COLS);
+SimpleKeypad keypad(keys, rowPins, colPins, ROWS, COLS);  // Changed to SimpleKeypad constructor format
 
 // Password variables
 const String DEFAULT_PASSWORD = "0000";
@@ -112,7 +112,7 @@ void setupPins() {
 
 void setupLCD() {
   Wire.begin();
-  lcd.init();
+  lcd.begin();  // LCD_I2C uses begin() without parameters when using default Wire
   lcd.backlight();
   lcd.createChar(0, lockChar);
   lcd.createChar(1, unlockChar);
@@ -210,7 +210,7 @@ void handleFingerprint() {
 }
 
 void handleKeypad() {
-  char key = keypad.getKey();
+  char key = keypad.getKey();  // SimpleKeypad uses the same getKey() method
   if (key) {
     // Process key press immediately
     Serial.print("Key pressed: ");
@@ -387,7 +387,7 @@ String getInput(String prompt, char confirmKey, char clearKey) {
   lcd.setCursor(0, 1);
 
   while (true) {
-    char key = keypad.getKey();
+    char key = keypad.getKey();  // SimpleKeypad uses the same getKey() method
     if (key) {
       if (key == confirmKey) break;
       if (key == clearKey) {
