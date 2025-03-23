@@ -40,8 +40,8 @@ A secure, reliable electronic locker system powered by ESP32 with fingerprint an
 1. Connect all components according to the pin configuration
 2. Install the required libraries:
    - Adafruit Fingerprint Library
-   - Keypad Library
-   - LiquidCrystal_I2C Library
+   - SimpleKeypad Library
+   - LCD_I2C Library
 3. Upload the code to your ESP32
 4. Open the serial monitor at 115200 baud to view system status
 
