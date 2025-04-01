@@ -67,41 +67,67 @@ Send these commands via the Serial Monitor:
 
 ## 🧩 System Workflow
 
-```
-         ┌─────────────────┐
-         │  System Ready   │
-         └────────┬────────┘
-                  │
-         ┌────────▼────────┐
-         │  Authentication │
-         └────────┬────────┘
-                  │
-        ┌─────────┴─────────┐
-        │                   │
-┌───────▼───────┐   ┌───────▼───────┐
-│   Fingerprint  │   │     Keypad    │
-└───────┬───────┘   └───────┬───────┘
-        │                   │
-        │                   │
-┌───────▼───────┐   ┌───────▼───────┐
-│  Image Match?  │   │ Correct PIN?  │
-└───────┬───────┘   └───────┬───────┘
-        │                   │
-        └─────────┬─────────┘
-                  │
-        ┌─────────▼─────────┐
-        │   Access Granted  │◄─────Yes
-        └─────────┬─────────┘
-                  │
-         ┌────────▼────────┐
-         │ Unlock for 3sec │
-         └────────┬────────┘
-                  │
-         ┌────────▼────────┐
-         │   Lock Again    │
-         └────────┬────────┘
-                  │
-                  ▼
+```mermaid
+flowchart TD
+    A([Start]) --> B[System Initialization]
+    B --> C[Ready Screen]
+    C --> D{User Action?}
+    
+    D -->|Fingerprint Scan| E[/Scan Fingerprint/]
+    D -->|Keypad Input| F[/Enter Password/]
+    D -->|Press ******| G[Change Password]
+    D -->|Serial Command| H[Admin Functions]
+    
+    E --> I{Fingerprint\nValid?}
+    I -->|Yes| J[[Unlock Door]]
+    I -->|No| K[Increment Attempts]
+    K --> L{Max Attempts\nReached?}
+    L -->|Yes| M[Lockout Mode]
+    L -->|No| C
+    
+    F --> N{Password\nCorrect?}
+    N -->|Yes| J
+    N -->|No| K
+    
+    G --> O{Authentication\nSuccess?}
+    O -->|Yes| P[/Enter New Password/]
+    O -->|No| C
+    P --> Q[[Save New Password]]
+    Q --> C
+    
+    H --> R{Command Type?}
+    R -->|Enroll| S[/Enroll Fingerprint/]
+    R -->|Delete| T[/Delete Fingerprint/]
+    R -->|Change PIN| G
+    
+    J --> U[Timer Countdown]
+    U --> V[[Relock Door]]
+    V --> C
+    
+    M --> W[Countdown Timer]
+    W -->|Time Expired| C
+    
+    %% Shape Legend
+    style A fill:#4CAF50,stroke:#388E3C
+    style J fill:#2196F3,stroke:#1976D2
+    style M fill:#F44336,stroke:#D32F2F
+    style G fill:#FF9800,stroke:#F57C00
+    style H fill:#9C27B0,stroke:#7B1FA2
+    
+    %% Proper shape usage
+    classDef startEnd fill:#4CAF50,stroke:#388E3C,color:white
+    classDef process fill:#f5f5f5,stroke:#333
+    classDef decision fill:#FFEB3B,stroke:#FBC02D
+    classDef io fill:#B3E5FC,stroke:#03A9F4
+    classDef subroutine fill:#C8E6C9,stroke:#4CAF50
+    classDef terminator fill:#E1BEE7,stroke:#9C27B0
+    
+    class A startEnd
+    class B,C,F,E,S,T,P process
+    class D,I,L,N,O,R decision
+    class J,V,Q subroutine
+    class G,H terminator
+    class M,W io
 ```
 
 ## 📝 Customization
