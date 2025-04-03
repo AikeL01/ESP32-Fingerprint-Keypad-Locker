@@ -241,7 +241,7 @@ void handleKeypad() {
       star_press_count++;
       if (star_press_count >= STAR_PRESS_THRESHOLD) {
         Serial.println("Entering change PIN mode...");
-        displayMessage("   Change PIN", "Mode Activated", 2000);
+        displayMessage("   PIN Change","  Initialized",2000);
         changePassword();
         star_press_count = 0;  // Reset the counter
       } else {
@@ -281,7 +281,7 @@ void displayMaskedInput() {
     lcd.clear();
     lcd.setCursor(0, 0);
     lcd.print("      PIN:");
-    lcd.setCursor(0, 1);
+    lcd.setCursor(5, 1);  // Start masked input at the 6th column
     for (int i = 0; i < input_password.length(); i++) {
       lcd.print("*");
     }
@@ -548,7 +548,7 @@ void checkPassword() {
   String storedPassword = getPassword();
   if (input_password == storedPassword) {
     Serial.println("Correct PIN!");
-    displayMessage("     PIN OK","");
+    displayMessage("     Access","    Granted");
     wrong_attempts = 0;  // Reset wrong attempts counter
     unlockDoor();
   } else {
@@ -613,7 +613,7 @@ void changePassword() {
     setPassword(newPassword);
     displayMessage("  PIN Updated","",2000);
   } else {
-    displayMessage("   PIN Error","",2000);
+    displayMessage("   PIN Error","   No Change",2000);
   }
   showReadyScreen();
 }
