@@ -51,11 +51,14 @@ const int BUZZER_LONG_BEEP = 200;  // Long beep duration
 
 // EEPROM address for storing the password
 #define PASSWORD_ADDR 0
-#define PASSWORD_MAX_LENGTH 8
+#define PASSWORD_MAX_LENGTH 6
 
 // Add a counter for consecutive '*' presses
 int star_press_count = 0;
 const int STAR_PRESS_THRESHOLD = 12;
+
+// Define the GPIO pin for wake-up
+#define WAKEUP_PIN 14
 
 // Function declarations
 void showReadyScreen();
@@ -83,6 +86,8 @@ void changePassword();
 bool getFingerprintEnroll(uint8_t id);  // Declare the missing function
 uint8_t getFingerprintID();  // Declare the missing function
 bool initFingerprint();  // Declare the missing function
+void setupHibernation();
+void enterHibernation();
 
 void setup() {
   Serial.begin(115200);
@@ -97,6 +102,9 @@ void setup() {
   if (EEPROM.read(PASSWORD_ADDR) == 0xFF) {
     setPassword(DEFAULT_PASSWORD);
   }
+
+  pinMode(WAKEUP_PIN, INPUT);  // Set wake-up pin as input
+  setupHibernation();
 
   showReadyScreen();
   Serial.println("Ready to scan fingerprint or enter password...");
@@ -114,6 +122,11 @@ void loop() {
   handleFingerprint();
   handleKeypad();  // Ensure keypad is checked frequently
   handleInactivity();
+
+  // Check for inactivity and enter hibernation
+  if (millis() - lastActivityTime > INACTIVITY_TIMEOUT) {
+    enterHibernation();
+  }
 
   // Reduce delay for better responsiveness
   delay(10);  // Shorter delay for improved keypad responsiveness
@@ -182,10 +195,10 @@ void handleLockoutMode() {
     wrong_attempts = 0;
     showReadyScreen();
     Serial.println("Lockout period ended. System ready.");
+    lastActivityTime = millis();  // Reset inactivity timer
   } else {
     int seconds_left = (LOCKOUT_DURATION - (current_time - lockout_start_time)) / 1000;
-    lcd.setCursor(0, 1);
-    lcd.print("Lockout: ");
+    lcd.setCursor(6, 1);
     lcd.print(seconds_left);
     lcd.print("s   ");
     delay(1000);
@@ -562,7 +575,7 @@ void checkPassword() {
     if (wrong_attempts >= MAX_WRONG_ATTEMPTS) {
       activateLockoutMode();
     } else {
-      displayMessage("   PIN Error","");
+      displayMessage("      PIN:","     Wrong");
       soundBuzzer(1);  // Short error beep
       delay(2000);
     }
@@ -575,7 +588,7 @@ void checkPassword() {
 // Activate lockout mode
 void activateLockoutMode() {
   Serial.println("Too many wrong attempts! System locked for 30 seconds.");
-  displayMessage("Too Many Attempts","");
+  displayMessage("Try Again Later","");
   lockout_mode = true;
   lockout_start_time = millis();
   soundBuzzer(3);  // Long alarm pattern
@@ -608,6 +621,17 @@ String getPassword() {
 // Add a new function to allow the user to change the password
 void changePassword() {
   Serial.println("Changing password...");
+  
+  // Ask for the current PIN
+  String currentPassword = getInput("  Current PIN:",'#','*');
+  if (currentPassword != getPassword()) {
+    Serial.println("Incorrect current PIN!");
+    displayMessage("   PIN Error","",2000);
+    showReadyScreen();
+    return;
+  }
+
+  // Ask for the new PIN
   String newPassword = getInput("    New PIN:", '#', '*');
   if (newPassword.length() > 0 && newPassword.length() <= PASSWORD_MAX_LENGTH) {
     setPassword(newPassword);
@@ -616,4 +640,21 @@ void changePassword() {
     displayMessage("   PIN Error","   No Change",2000);
   }
   showReadyScreen();
+}
+
+// Function to configure hibernation
+void setupHibernation() {
+  esp_sleep_enable_ext1_wakeup(GPIO_SEL_14, ESP_EXT1_WAKEUP_ANY_HIGH);
+}
+
+// Function to enter hibernation
+void enterHibernation() {
+  lcd.backlight();
+  displayMessage(" Hibernating...","",2000);
+  lcd.noBacklight();
+  Serial.println("Entering hibernation...");
+  esp_sleep_pd_config(ESP_PD_DOMAIN_RTC_PERIPH, ESP_PD_OPTION_OFF);
+  esp_sleep_pd_config(ESP_PD_DOMAIN_RTC_SLOW_MEM, ESP_PD_OPTION_OFF);
+  esp_sleep_pd_config(ESP_PD_DOMAIN_RTC_FAST_MEM, ESP_PD_OPTION_OFF);
+  esp_deep_sleep_start();
 }
