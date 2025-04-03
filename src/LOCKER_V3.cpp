@@ -3,6 +3,7 @@
 #include <SimpleKeypad.h>  // Changed from Keypad.h
 #include <Wire.h>
 #include <LCD_I2C.h>
+#include <EEPROM.h>  // Include EEPROM library
 
 // Pin and hardware setup
 #define RELAY_PIN 26       // ESP32 GPIO pin connected to relay
@@ -48,14 +49,18 @@ const int UNLOCK_DURATION = 3000;  // Door unlock duration in milliseconds
 const int BUZZER_SHORT_BEEP = 100;  // Short beep duration
 const int BUZZER_LONG_BEEP = 200;  // Long beep duration
 
+// EEPROM address for storing the password
+#define PASSWORD_ADDR 0
+#define PASSWORD_MAX_LENGTH 8
+
+// Add a counter for consecutive '*' presses
+int star_press_count = 0;
+const int STAR_PRESS_THRESHOLD = 12;
+
 // Function declarations
 void showReadyScreen();
 void unlockDoor();
 void displayMessage(String line1, String line2, int delayTime = 0);
-uint8_t getFingerprintID();
-bool initFingerprint();
-bool getFingerprintEnroll(uint8_t id);
-void soundBuzzer(int pattern);
 void checkPassword();
 void activateLockoutMode();
 int getIDFromInput();
@@ -72,14 +77,26 @@ void handleFingerprint();
 void handleKeypad();
 void handleInactivity();
 void displayMaskedInput();
+void setPassword(const String &newPassword);
+String getPassword();
+void changePassword();
+bool getFingerprintEnroll(uint8_t id);  // Declare the missing function
+uint8_t getFingerprintID();  // Declare the missing function
+bool initFingerprint();  // Declare the missing function
 
 void setup() {
   Serial.begin(115200);
   Serial.println("ESP32 ZA620_M5 Fingerprint and Keypad Lock System with LCD");
 
+  EEPROM.begin(512);  // Initialize EEPROM with 512 bytes
   setupPins();
   setupLCD();
   setupFingerprintSensor();
+
+  // Check if a password exists in EEPROM, otherwise set the default password
+  if (EEPROM.read(PASSWORD_ADDR) == 0xFF) {
+    setPassword(DEFAULT_PASSWORD);
+  }
 
   showReadyScreen();
   Serial.println("Ready to scan fingerprint or enter password...");
@@ -118,7 +135,7 @@ void setupLCD() {
   lcd.createChar(1, unlockChar);
   lcd.createChar(2, fingerChar);
 
-  displayMessage("Biometric Locker", "Initializing...");
+  displayMessage("  Waking Up...","");
 }
 
 void setupFingerprintSensor() {
@@ -128,9 +145,9 @@ void setupFingerprintSensor() {
 
   if (!initFingerprint()) {
     Serial.println("Failed to connect to fingerprint sensor!");
-    displayMessage("Sensor Failed!", "System limited", 2000);
+    displayMessage("Sensor Failed!","System limited",2000);
   } else {
-    Serial.println("ZA620_M5 fingerprint sensor connected successfully");
+    Serial.println("ZW101 fingerprint sensor connected successfully");
     displaySensorParameters();
   }
 }
@@ -154,7 +171,7 @@ void displaySensorParameters() {
     Serial.print("Baud rate: ");
     Serial.println(finger.baud_rate);
 
-    displayMessage("Sensor Ready", "Capacity:" + String(finger.capacity), 2000);
+    displayMessage("Sensor Ready","Capacity:" + String(finger.capacity), 2000);
   }
 }
 
@@ -185,10 +202,14 @@ void handleSerialCommands() {
       case 'd':
         deleteFingerprint();
         break;
+      case 'p':  // New command to change the password
+        changePassword();
+        break;
       default:
         Serial.println("Valid commands:");
         Serial.println("e - Enroll a new fingerprint");
         Serial.println("d - Delete a stored fingerprint");
+        Serial.println("p - Change the password");
         break;
     }
     lastActivityTime = millis();  // Update last activity time
@@ -217,17 +238,28 @@ void handleKeypad() {
     Serial.println(key);
 
     if (key == '*') {
-      input_password = "";
-      Serial.println("Input cleared");
-      displayMessage("Password:", "Cleared", 500);  // Shorter delay for feedback
-      showReadyScreen();
-    } else if (key == '#') {
-      checkPassword();
+      star_press_count++;
+      if (star_press_count >= STAR_PRESS_THRESHOLD) {
+        Serial.println("Entering change PIN mode...");
+        displayMessage("   Change PIN", "Mode Activated", 2000);
+        changePassword();
+        star_press_count = 0;  // Reset the counter
+      } else {
+        input_password = "";
+        Serial.println("Input cleared");
+        displayMessage("      PIN:", "    Cleared", 500);  // Shorter delay for feedback
+        showReadyScreen();
+      }
     } else {
-      input_password += key;
-      displayMaskedInput();
-      if (input_password.length() >= 4) {
+      star_press_count = 0;  // Reset the counter if any other key is pressed
+      if (key == '#') {
         checkPassword();
+      } else {
+        input_password += key;
+        displayMaskedInput();
+        if (input_password.length() >= 6) {  // Changed from 4 to 6
+          checkPassword();
+        }
       }
     }
     lastActivityTime = millis();  // Update last activity time
@@ -248,7 +280,7 @@ void displayMaskedInput() {
   if (input_password != lastInput) {
     lcd.clear();
     lcd.setCursor(0, 0);
-    lcd.print("Password:");
+    lcd.print("      PIN:");
     lcd.setCursor(0, 1);
     for (int i = 0; i < input_password.length(); i++) {
       lcd.print("*");
@@ -309,9 +341,7 @@ void showReadyScreen() {
   lcd.clear();
   lcd.setCursor(0, 0);
   lcd.write(0);  // Lock character
-  lcd.print(" Locker");
-  lcd.setCursor(0, 1);
-  lcd.print("Ready to unlock");
+  lcd.print("    Ready");
 }
 
 uint8_t getFingerprintID() {
@@ -319,7 +349,7 @@ uint8_t getFingerprintID() {
   if (p != FINGERPRINT_OK) return 0;
 
   Serial.println("Finger detected!");
-  displayMessage("Finger detected", "Processing...");
+  displayMessage("  Processing...","");
 
   // Update last activity time when a fingerprint is detected
   lastActivityTime = millis();
@@ -327,7 +357,7 @@ uint8_t getFingerprintID() {
   p = finger.image2Tz();
   if (p != FINGERPRINT_OK) {
     Serial.println("Image conversion failed");
-    displayMessage("Image Error", "Try again", 1500);
+    displayMessage("Image Error","Try again", 1500);
     showReadyScreen();
     return 0;
   }
@@ -335,7 +365,7 @@ uint8_t getFingerprintID() {
   p = finger.fingerFastSearch();
   if (p != FINGERPRINT_OK) {
     Serial.println("Fingerprint not recognized");
-    displayMessage("No Match Found", "Access Denied");
+    displayMessage("No Match","Access Denied");
     soundBuzzer(1);  // Short error beep
     
     // Increment wrong attempts counter for failed fingerprint recognition
@@ -515,9 +545,10 @@ void deleteFingerprint() {
 
 // Check password
 void checkPassword() {
-  if (input_password == DEFAULT_PASSWORD) {
-    Serial.println("Correct password!");
-    displayMessage("Password Correct", "Access Granted");
+  String storedPassword = getPassword();
+  if (input_password == storedPassword) {
+    Serial.println("Correct PIN!");
+    displayMessage("     PIN OK","");
     wrong_attempts = 0;  // Reset wrong attempts counter
     unlockDoor();
   } else {
@@ -531,7 +562,7 @@ void checkPassword() {
     if (wrong_attempts >= MAX_WRONG_ATTEMPTS) {
       activateLockoutMode();
     } else {
-      displayMessage("Password Error!", "Access Denied");
+      displayMessage("   PIN Error","");
       soundBuzzer(1);  // Short error beep
       delay(2000);
     }
@@ -544,8 +575,45 @@ void checkPassword() {
 // Activate lockout mode
 void activateLockoutMode() {
   Serial.println("Too many wrong attempts! System locked for 30 seconds.");
-  displayMessage("Too Many Attempts", "System Locked!");
+  displayMessage("Too Many Attempts","");
   lockout_mode = true;
   lockout_start_time = millis();
   soundBuzzer(3);  // Long alarm pattern
+}
+
+// Function to set a new password in EEPROM
+void setPassword(const String &newPassword) {
+  for (int i = 0; i < PASSWORD_MAX_LENGTH; i++) {
+    if (i < newPassword.length()) {
+      EEPROM.write(PASSWORD_ADDR + i, newPassword[i]);
+    } else {
+      EEPROM.write(PASSWORD_ADDR + i, 0);  // Null-terminate
+    }
+  }
+  EEPROM.commit();
+  Serial.println("Password updated successfully!");
+}
+
+// Function to retrieve the password from EEPROM
+String getPassword() {
+  String password = "";
+  for (int i = 0; i < PASSWORD_MAX_LENGTH; i++) {
+    char c = EEPROM.read(PASSWORD_ADDR + i);
+    if (c == 0) break;  // Stop at null terminator
+    password += c;
+  }
+  return password;
+}
+
+// Add a new function to allow the user to change the password
+void changePassword() {
+  Serial.println("Changing password...");
+  String newPassword = getInput("    New PIN:", '#', '*');
+  if (newPassword.length() > 0 && newPassword.length() <= PASSWORD_MAX_LENGTH) {
+    setPassword(newPassword);
+    displayMessage("  PIN Updated","",2000);
+  } else {
+    displayMessage("   PIN Error","",2000);
+  }
+  showReadyScreen();
 }
