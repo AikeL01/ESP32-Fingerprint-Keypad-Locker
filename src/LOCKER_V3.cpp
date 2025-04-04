@@ -6,10 +6,10 @@
 #include <EEPROM.h>  // Include EEPROM library
 
 // Pin and hardware setup
-#define RELAY_PIN 26       // ESP32 GPIO pin connected to relay
+#define RELAY_PIN 13       // ESP32 GPIO pin connected to relay
 #define FINGERPRINT_RX 16  // ESP32 RX pin connected to ZA620_M5 TX
 #define FINGERPRINT_TX 17  // ESP32 TX pin connected to ZA620_M5 RX
-#define BUZZER_PIN 15      // ESP32 GPIO pin connected to piezo buzzer
+#define BUZZER_PIN 12      // ESP32 GPIO pin connected to piezo buzzer
 #define I2C_ADDR 0x27      // I2C address of LCD
 #define LCD_COLS 16        // LCD columns
 #define LCD_ROWS 2         // LCD rows
@@ -43,6 +43,7 @@ const unsigned long LOCKOUT_DURATION = 30000;  // 30 seconds lockout
 // Backlight timeout variables
 unsigned long lastActivityTime = 0;
 const unsigned long INACTIVITY_TIMEOUT = 10000;  // 10 seconds
+const unsigned long HIBERNATION_TIMEOUT = INACTIVITY_TIMEOUT * 2;  // Double inactivity time
 
 // Replace magic numbers with constants
 const int UNLOCK_DURATION = 3000;  // Door unlock duration in milliseconds
@@ -124,7 +125,7 @@ void loop() {
   handleInactivity();
 
   // Check for inactivity and enter hibernation
-  if (millis() - lastActivityTime > INACTIVITY_TIMEOUT) {
+  if (millis() - lastActivityTime > HIBERNATION_TIMEOUT) {  // Use HIBERNATION_TIMEOUT
     enterHibernation();
   }
 
