@@ -85,6 +85,7 @@ bool getFingerprintEnroll(uint8_t id);
 uint8_t getFingerprintID();
 bool initFingerprint();
 void handleHibernation();
+bool captureFingerprintImage(uint8_t bufferID);
 
 void setup() {
   Serial.begin(115200);
@@ -191,8 +192,10 @@ void handleLockoutMode() {
   } else {
     int seconds_left = (LOCKOUT_DURATION - (current_time - lockout_start_time)) / 1000;
     lcd.setCursor(6, 1);
+    lcd.print("   ");
+    lcd.setCursor(6, 1);
     lcd.print(seconds_left);
-    lcd.print("s   ");
+    lcd.print("s");
     delay(1000);
   }
 }
@@ -296,28 +299,22 @@ void displayMaskedInput() {
 
 // Buzzer patterns: 0=success, 1=error, 2=warning, 3=alarm
 void soundBuzzer(int pattern) {
-  switch (pattern) {
-    case 0:  // Success beep
-      tone(BUZZER_PIN, 1000, BUZZER_SHORT_BEEP);
+  const int frequencies[][2] = {
+    {1000, 2000},  // Success beep frequencies
+    {300, 0},      // Error beep frequency
+    {500, 500},    // Warning beep frequency
+    {800, 600}     // Alarm frequencies
+  };
+
+  const int repeatCounts[] = {1, 1, 2, 5};  // Number of repetitions for each pattern
+
+  for (int i = 0; i < repeatCounts[pattern]; i++) {
+    tone(BUZZER_PIN, frequencies[pattern][0], BUZZER_SHORT_BEEP);
+    delay(BUZZER_SHORT_BEEP);
+    if (frequencies[pattern][1] > 0) {
+      tone(BUZZER_PIN, frequencies[pattern][1], BUZZER_SHORT_BEEP);
       delay(BUZZER_SHORT_BEEP);
-      tone(BUZZER_PIN, 2000, BUZZER_SHORT_BEEP);
-      break;
-    case 1:  // Error beep
-      tone(BUZZER_PIN, 300, BUZZER_LONG_BEEP);
-      break;
-    case 2:  // Warning beep
-      tone(BUZZER_PIN, 500, BUZZER_SHORT_BEEP);
-      delay(BUZZER_SHORT_BEEP);
-      tone(BUZZER_PIN, 500, BUZZER_SHORT_BEEP);
-      break;
-    case 3:  // Alarm
-      for (int i = 0; i < 5; i++) {
-        tone(BUZZER_PIN, 800, BUZZER_SHORT_BEEP);
-        delay(BUZZER_SHORT_BEEP);
-        tone(BUZZER_PIN, 600, BUZZER_SHORT_BEEP);
-        delay(BUZZER_SHORT_BEEP);
-      }
-      break;
+    }
   }
 }
 
@@ -472,45 +469,42 @@ void enrollFingerprint() {
   showReadyScreen();
 }
 
-bool getFingerprintEnroll(uint8_t id) {
-  Serial.println("Place finger on sensor...");
-
+// Helper function to capture and process a fingerprint image
+bool captureFingerprintImage(uint8_t bufferID) {
   uint8_t p = finger.getImage();
   if (p != FINGERPRINT_OK) {
     Serial.println("Place finger again");
     return false;
   }
 
-  p = finger.image2Tz(1);
+  p = finger.image2Tz(bufferID);
   if (p != FINGERPRINT_OK) {
     Serial.println("Image conversion failed");
     delay(2000);
     return false;
   }
 
-  Serial.println("DO NOT Remove finger");
+  return true;
+}
+
+// Refactor `getFingerprintEnroll` to use the helper function
+bool getFingerprintEnroll(uint8_t id) {
+  Serial.println("Place finger");
+
+  if (!captureFingerprintImage(1)) return false;
+
+  Serial.println("Remove finger");
   delay(2000);
 
-  while (p != FINGERPRINT_NOFINGER) {
-    p = finger.getImage();
+  while (finger.getImage() != FINGERPRINT_NOFINGER) {
+    // Wait for the finger to be removed
   }
 
-  p = finger.getImage();
-  if (p != FINGERPRINT_OK) {
-    Serial.println("Place finger again");
-    return false;
-  }
-
-  p = finger.image2Tz(2);
-  if (p != FINGERPRINT_OK) {
-    Serial.println("Image conversion failed");
-    delay(2000);
-    return false;
-  }
+  Serial.println("Place the same finger again...");
+  if (!captureFingerprintImage(2)) return false;
 
   Serial.println("Creating fingerprint model...");
-
-  p = finger.createModel();
+  uint8_t p = finger.createModel();
   if (p != FINGERPRINT_OK) {
     Serial.println("Failed to create fingerprint model");
     delay(2000);
@@ -579,8 +573,8 @@ void checkPassword() {
 
 // Activate lockout mode
 void activateLockoutMode() {
-  Serial.println("Too many wrong attempts! System locked for 30 seconds.");
-  displayMessage("Try Again Later","");
+  Serial.println("Too many wrong attempts! Lockeout for 30 seconds.");
+  displayMessage("    Lockout:","");
   lockout_mode = true;
   lockout_start_time = millis();
   soundBuzzer(3);  // Long alarm pattern
@@ -634,11 +628,9 @@ void changePassword() {
   showReadyScreen();
 }
 
-// Function to handle hibernation
+// Handle hibernation
 void handleHibernation() {
-  // Configure hibernation
   esp_sleep_enable_ext1_wakeup(GPIO_SEL_14, ESP_EXT1_WAKEUP_ANY_HIGH);
-
   lcd.backlight();
   displayMessage(" Hibernating...", "", 2000);
   lcd.noBacklight();
