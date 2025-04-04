@@ -1,21 +1,21 @@
 #include <Arduino.h>
 #include <Adafruit_Fingerprint.h>
-#include <SimpleKeypad.h>  // Changed from Keypad.h
+#include <SimpleKeypad.h>
 #include <Wire.h>
 #include <LCD_I2C.h>
-#include <EEPROM.h>  // Include EEPROM library
+#include <EEPROM.h>
 
 // Pin and hardware setup
-#define RELAY_PIN 13       // ESP32 GPIO pin connected to relay
-#define FINGERPRINT_RX 16  // ESP32 RX pin connected to ZA620_M5 TX
-#define FINGERPRINT_TX 17  // ESP32 TX pin connected to ZA620_M5 RX
-#define BUZZER_PIN 12      // ESP32 GPIO pin connected to piezo buzzer
+#define RELAY_PIN 13
+#define FINGERPRINT_RX 16  // ESP32 RX pin connected to ZW101 TX
+#define FINGERPRINT_TX 17  // ESP32 TX pin connected to ZW101 RX
+#define BUZZER_PIN 12
 #define I2C_ADDR 0x27      // I2C address of LCD
-#define LCD_COLS 16        // LCD columns
-#define LCD_ROWS 2         // LCD rows
+#define LCD_COLS 16
+#define LCD_ROWS 2
 
 // Create hardware objects
-LCD_I2C lcd(I2C_ADDR, LCD_COLS, LCD_ROWS);  // Changed from LiquidCrystal_I2C to LCD_I2C
+LCD_I2C lcd(I2C_ADDR, LCD_COLS, LCD_ROWS);
 HardwareSerial fingerprintSerial(2);  // Using ESP32's Hardware Serial 2
 Adafruit_Fingerprint finger = Adafruit_Fingerprint(&fingerprintSerial);
 
@@ -29,7 +29,7 @@ const byte ROWS = 4, COLS = 3;
 char keys[ROWS * COLS] = { '1', '2', '3', '4', '5', '6', '7', '8', '9', '*', '0', '#' };
 byte rowPins[ROWS] = { 2, 0, 4, 5 };
 byte colPins[COLS] = { 18, 19, 23 };
-SimpleKeypad keypad(keys, rowPins, colPins, ROWS, COLS);  // Changed to SimpleKeypad constructor format
+SimpleKeypad keypad(keys, rowPins, colPins, ROWS, COLS);
 
 // Password variables
 const String DEFAULT_PASSWORD = "0000";
@@ -38,17 +38,17 @@ int wrong_attempts = 0;
 const int MAX_WRONG_ATTEMPTS = 5;
 bool lockout_mode = false;
 unsigned long lockout_start_time = 0;
-const unsigned long LOCKOUT_DURATION = 30000;  // 30 seconds lockout
+const unsigned long LOCKOUT_DURATION = 30000;
 
 // Backlight timeout variables
 unsigned long lastActivityTime = 0;
-const unsigned long INACTIVITY_TIMEOUT = 10000;  // 10 seconds
-const unsigned long HIBERNATION_TIMEOUT = INACTIVITY_TIMEOUT * 2;  // Double inactivity time
+const unsigned long INACTIVITY_TIMEOUT = 10000;
+const unsigned long HIBERNATION_TIMEOUT = INACTIVITY_TIMEOUT * 2;
 
 // Replace magic numbers with constants
-const int UNLOCK_DURATION = 3000;  // Door unlock duration in milliseconds
-const int BUZZER_SHORT_BEEP = 100;  // Short beep duration
-const int BUZZER_LONG_BEEP = 200;  // Long beep duration
+const int UNLOCK_DURATION = 3000;
+const int BUZZER_SHORT_BEEP = 100;
+const int BUZZER_LONG_BEEP = 200;
 
 // EEPROM address for storing the password
 #define PASSWORD_ADDR 0
@@ -84,9 +84,9 @@ void displayMaskedInput();
 void setPassword(const String &newPassword);
 String getPassword();
 void changePassword();
-bool getFingerprintEnroll(uint8_t id);  // Declare the missing function
-uint8_t getFingerprintID();  // Declare the missing function
-bool initFingerprint();  // Declare the missing function
+bool getFingerprintEnroll(uint8_t id);
+uint8_t getFingerprintID();
+bool initFingerprint();
 void setupHibernation();
 void enterHibernation();
 
@@ -125,17 +125,15 @@ void loop() {
   handleInactivity();
 
   // Check for inactivity and enter hibernation
-  if (millis() - lastActivityTime > HIBERNATION_TIMEOUT) {  // Use HIBERNATION_TIMEOUT
+  if (millis() - lastActivityTime > HIBERNATION_TIMEOUT) {
     enterHibernation();
   }
-
-  // Reduce delay for better responsiveness
-  delay(10);  // Shorter delay for improved keypad responsiveness
+  delay(10);
 }
 
 void setupPins() {
   pinMode(RELAY_PIN, OUTPUT);
-  digitalWrite(RELAY_PIN, HIGH);  // REVERSED LOGIC: HIGH = locked
+  digitalWrite(RELAY_PIN, HIGH);
 
   pinMode(BUZZER_PIN, OUTPUT);
   digitalWrite(BUZZER_PIN, LOW);  // Ensure buzzer is off
@@ -143,7 +141,7 @@ void setupPins() {
 
 void setupLCD() {
   Wire.begin();
-  lcd.begin();  // LCD_I2C uses begin() without parameters when using default Wire
+  lcd.begin();
   lcd.backlight();
   lcd.createChar(0, lockChar);
   lcd.createChar(1, unlockChar);
@@ -196,7 +194,7 @@ void handleLockoutMode() {
     wrong_attempts = 0;
     showReadyScreen();
     Serial.println("Lockout period ended. System ready.");
-    lastActivityTime = millis();  // Reset inactivity timer
+    lastActivityTime = millis();
   } else {
     int seconds_left = (LOCKOUT_DURATION - (current_time - lockout_start_time)) / 1000;
     lcd.setCursor(6, 1);
@@ -216,7 +214,7 @@ void handleSerialCommands() {
       case 'd':
         deleteFingerprint();
         break;
-      case 'p':  // New command to change the password
+      case 'p':
         changePassword();
         break;
       default:
@@ -226,7 +224,7 @@ void handleSerialCommands() {
         Serial.println("p - Change the password");
         break;
     }
-    lastActivityTime = millis();  // Update last activity time
+    lastActivityTime = millis();
   }
 }
 
@@ -240,7 +238,7 @@ void handleFingerprint() {
     wrong_attempts = 0;  // Reset wrong attempts on successful fingerprint auth
     unlockDoor();
     showReadyScreen();
-    lastActivityTime = millis();  // Update last activity time
+    lastActivityTime = millis();
   }
 }
 
@@ -261,7 +259,7 @@ void handleKeypad() {
       } else {
         input_password = "";
         Serial.println("Input cleared");
-        displayMessage("      PIN:", "    Cleared", 500);  // Shorter delay for feedback
+        displayMessage("      PIN:", "    Cleared", 500);
         showReadyScreen();
       }
     } else {
@@ -271,12 +269,12 @@ void handleKeypad() {
       } else {
         input_password += key;
         displayMaskedInput();
-        if (input_password.length() >= 6) {  // Changed from 4 to 6
+        if (input_password.length() >= 6) {
           checkPassword();
         }
       }
     }
-    lastActivityTime = millis();  // Update last activity time
+    lastActivityTime = millis();
   }
 }
 
@@ -431,7 +429,7 @@ String getInput(String prompt, char confirmKey, char clearKey) {
   lcd.setCursor(0, 1);
 
   while (true) {
-    char key = keypad.getKey();  // SimpleKeypad uses the same getKey() method
+    char key = keypad.getKey();
     if (key) {
       if (key == confirmKey) break;
       if (key == clearKey) {
