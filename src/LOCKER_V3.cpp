@@ -84,12 +84,11 @@ void changePassword();
 bool getFingerprintEnroll(uint8_t id);
 uint8_t getFingerprintID();
 bool initFingerprint();
-void setupHibernation();
-void enterHibernation();
+void handleHibernation();
 
 void setup() {
   Serial.begin(115200);
-  Serial.println("ESP32 ZA620_M5 Fingerprint and Keypad Lock System with LCD");
+  Serial.println("ESP32 ZW101 Fingerprint & Keypad Lock System");
 
   EEPROM.begin(512);  // Initialize EEPROM with 512 bytes
   setupPins();
@@ -100,8 +99,6 @@ void setup() {
   if (EEPROM.read(PASSWORD_ADDR) == 0xFF) {
     setPassword(DEFAULT_PASSWORD);
   }
-
-  setupHibernation();
 
   showReadyScreen();
   Serial.println("Ready to scan fingerprint or enter password...");
@@ -122,7 +119,7 @@ void loop() {
 
   // Check for inactivity and enter hibernation
   if (millis() - lastActivityTime > HIBERNATION_TIMEOUT) {
-    enterHibernation();
+    handleHibernation();
   }
   delay(10);
 }
@@ -637,15 +634,13 @@ void changePassword() {
   showReadyScreen();
 }
 
-// Function to configure hibernation
-void setupHibernation() {
+// Function to handle hibernation
+void handleHibernation() {
+  // Configure hibernation
   esp_sleep_enable_ext1_wakeup(GPIO_SEL_14, ESP_EXT1_WAKEUP_ANY_HIGH);
-}
 
-// Function to enter hibernation
-void enterHibernation() {
   lcd.backlight();
-  displayMessage(" Hibernating...","",2000);
+  displayMessage(" Hibernating...", "", 2000);
   lcd.noBacklight();
   Serial.println("Entering hibernation...");
   esp_sleep_pd_config(ESP_PD_DOMAIN_RTC_PERIPH, ESP_PD_OPTION_OFF);
