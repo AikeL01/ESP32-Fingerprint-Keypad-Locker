@@ -160,22 +160,22 @@ void displaySensorParameters() {
 }
 
 void handleLockoutMode() {
-    unsigned long current_time = millis();
-    if (current_time - lockout_start >= Config::LOCKOUT_TIME) {
-        lockout_mode = false;
+    static bool init = true;
+    if (millis() - lockout_start >= Config::LOCKOUT_TIME) {
+        lockout_mode = init = false;
         wrong_attempts = 0;
         showReadyScreen();
-        Serial.println("Lockout period ended. System ready.");
-        last_activity = millis();
-    } else {
-        int seconds_left = (Config::LOCKOUT_TIME - (current_time - lockout_start)) / 1000;
-        lcd.setCursor(6, 1);
-        lcd.print("   ");
-        lcd.setCursor(6, 1);
-        lcd.print(seconds_left);
-        lcd.print("s");
-        delay(1000);
+        return;
     }
+    
+    int bar = ((Config::LOCKOUT_TIME - (millis() - lockout_start)) * 16) / Config::LOCKOUT_TIME;
+    if (init) {
+        lcd.clear();
+        lcd.print("    Lockout:");
+        init = false;
+    }
+    lcd.setCursor(0, 1);
+    for(byte i = 0; i < 16; i++) lcd.write(i < bar ? 0xFF : 32);
 }
 
 void handleSerialCommands() {
@@ -520,7 +520,6 @@ void checkPassword() {
 
 void activateLockoutMode() {
     Serial.println("Too many wrong attempts! Lockeout for 30 seconds.");
-    displayMessage("    Lockout:","");
     lockout_mode = true;
     lockout_start = millis();
     soundBuzzer(3);  // Long alarm pattern
