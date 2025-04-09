@@ -4,6 +4,8 @@
 #include <Wire.h>
 #include <LCD_I2C.h>
 #include <EEPROM.h>
+#include "esp_sleep.h"
+#include "driver/rtc_io.h"
 
 #define CONFIG_ESP_SYSTEM_PM_POWER_DOWN_CPU 1
 
@@ -16,6 +18,9 @@ struct PinConfig {
     static constexpr uint8_t BUZZER_CHANNEL = 0;  // LEDC channel for buzzer
     static constexpr uint8_t BUZZER_RESOLUTION = 8;  // 8-bit resolution
     static constexpr uint32_t BUZZER_BASE_FREQ = 2000;  // Base frequency in Hz
+    static constexpr uint8_t WAKE_PIN = 23;  // External wake-up pin
+    static constexpr uint64_t KEYPAD_WAKE_PINS = ((1ULL << 32) | (1ULL << 33) | (1ULL << 25) | (1ULL << 26) | 
+                                                 (1ULL << 27) | (1ULL << 14) | (1ULL << 12));  // Keypad pins for wake-up
 };
 
 struct Config {
@@ -53,6 +58,10 @@ Adafruit_Fingerprint finger(&fingerprintSerial);
 byte lockChar[8] = {0b01110,0b10001,0b10001,0b11111,0b11011,0b11011,0b11111,0b00000};
 byte unlockChar[8] = {0b01110,0b10000,0b10000,0b11111,0b11011,0b11011,0b11111,0b00000};
 byte fingerChar[8] = {0b00000,0b00000,0b01110,0b11111,0b11111,0b11111,0b01110,0b00000};
+byte halfLockChar[8] = {0b01110,0b10001,0b10000,0b11111,0b11011,0b11011,0b11111,0b00000}; // Half-lock for 2FA waiting
+byte errorLockChar[8] = {0b01110,0b10101,0b10001,0b11111,0b11011,0b11011,0b11111,0b00000}; // Error lock with X pattern
+byte emptyBarChar[8] = {B11111,B10001,B10001,B10001,B10001,B10001,B11111,B00000}; // Empty progress bar segment
+byte filledBarChar[8] = {B11111,B11111,B11111,B11111,B11111,B11111,B11111,B00000}; // Filled progress bar segment
 
 // Keypad setup
 const byte ROWS = 4, COLS = 3;
@@ -112,27 +121,53 @@ void playTone(const uint16_t freq, const uint32_t dur);
 void noTone();
 void setAuthMode(Config::AuthMode mode);
 Config::AuthMode getAuthMode();
+void soundBuzzer(int pattern);
 
 void setup() {
     // Initialize Serial communication
     Serial.begin(115200);
     Serial.println("System starting...");
     
+    // Check wake-up cause and print detailed debug info
+    esp_sleep_wakeup_cause_t wakeup_reason = esp_sleep_get_wakeup_cause();
+    uint64_t ext1_wakeup_pins = 0;
+    
+    if (wakeup_reason != ESP_SLEEP_WAKEUP_UNDEFINED) {
+        switch(wakeup_reason) {
+            case ESP_SLEEP_WAKEUP_EXT0:
+                Serial.println("Wake up from EXT0 (GPIO23)");
+                break;
+            case ESP_SLEEP_WAKEUP_EXT1:
+                ext1_wakeup_pins = esp_sleep_get_ext1_wakeup_status();
+                Serial.printf("Wake up from EXT1 (Keypad). Pin mask: 0x%llx\n", ext1_wakeup_pins);
+                break;
+            default:
+                Serial.printf("Wake up from other source: %d\n", wakeup_reason);
+                break;
+        }
+    }
+    
     // Initialize EEPROM with minimal size needed
     EEPROM.begin(Config::EEPROM_SIZE);
     
     setupPins();
     
+    // Configure GPIO23 as input with strong pull-down for wake-up
+    pinMode(PinConfig::WAKE_PIN, INPUT_PULLDOWN);
+    rtc_gpio_pulldown_en((gpio_num_t)PinConfig::WAKE_PIN);
+    
+    // Configure keypad pins with pull-down
+    const byte allPins[] = {32, 33, 25, 26, 27, 14, 12};  // All keypad pins
+    for (byte pin : allPins) {
+        pinMode(pin, INPUT_PULLDOWN);
+        rtc_gpio_pulldown_en((gpio_num_t)pin);
+    }
+    
     // Initialize I2C and LCD
     Wire.begin();
     delay(100);  // Give I2C bus time to stabilize
     
-    lcd.begin();
-    lcd.display();
-    lcd.backlight();
-    lcd.createChar(0, lockChar);
-    lcd.createChar(1, unlockChar);
-    lcd.createChar(2, fingerChar);
+    setupLCD();  // This will now handle all LCD initialization including custom chars
     
     setupFingerprintSensor();
     
@@ -140,6 +175,14 @@ void setup() {
     if (EEPROM.read(0) == 0xFF) {
         setPassword("123456");
         EEPROM.commit();
+    }
+    
+    // Display wake-up source if from deep sleep
+    if (wakeup_reason != ESP_SLEEP_WAKEUP_UNDEFINED) {
+        String wakeMsg = "Wake: ";
+        wakeMsg += (wakeup_reason == ESP_SLEEP_WAKEUP_EXT0) ? "GPIO23" : 
+                   (wakeup_reason == ESP_SLEEP_WAKEUP_EXT1) ? "Keypad" : "Other";
+        displayMessage(wakeMsg, "", 1000);
     }
     
     showReadyScreen();
@@ -180,32 +223,44 @@ void setupPins() {
 
     // Configure buzzer pin for digital output
     pinMode(PinConfig::BUZZER, OUTPUT);
-    digitalWrite(PinConfig::BUZZER, LOW);  // Initialize MOSFET off
+    digitalWrite(PinConfig::BUZZER, LOW);
 
-    // Configure keypad pins - start with columns as inputs with pull-ups
-    for(byte i = 0; i < COLS; i++) {
-        pinMode(colPins[i], INPUT_PULLUP);
-    }
-    
-    // Configure rows as outputs initially LOW
+    // Configure wake pin with pull-down only
+    pinMode(PinConfig::WAKE_PIN, INPUT);
+    gpio_set_pull_mode((gpio_num_t)PinConfig::WAKE_PIN, GPIO_PULLDOWN_ONLY);
+    gpio_wakeup_enable((gpio_num_t)PinConfig::WAKE_PIN, GPIO_INTR_HIGH_LEVEL);
+
+    // Configure keypad rows as outputs
     for(byte i = 0; i < ROWS; i++) {
         pinMode(rowPins[i], OUTPUT);
-        digitalWrite(rowPins[i], LOW);
+        digitalWrite(rowPins[i], HIGH);
+    }
+    
+    // Configure keypad columns with pull-up only
+    for(byte i = 0; i < COLS; i++) {
+        pinMode(colPins[i], INPUT);
+        gpio_set_pull_mode((gpio_num_t)colPins[i], GPIO_PULLUP_ONLY);
     }
 
     // Configure buzzer pin for PWM output using LEDC
     ledcSetup(PinConfig::BUZZER_CHANNEL, PinConfig::BUZZER_BASE_FREQ, PinConfig::BUZZER_RESOLUTION);
     ledcAttachPin(PinConfig::BUZZER, PinConfig::BUZZER_CHANNEL);
-    ledcWrite(PinConfig::BUZZER_CHANNEL, 0);  // Start with buzzer off
+    ledcWrite(PinConfig::BUZZER_CHANNEL, 0);
 }
 
 void setupLCD() {
     Wire.begin();
     lcd.begin();
     lcd.backlight();  // Ensure backlight is on after wake-up
+    
+    // Create all custom characters in one place
     lcd.createChar(0, lockChar);
     lcd.createChar(1, unlockChar);
     lcd.createChar(2, fingerChar);
+    lcd.createChar(3, halfLockChar);    // Half-lock for 2FA waiting
+    lcd.createChar(4, errorLockChar);   // Error lock for lockout
+    lcd.createChar(5, emptyBarChar);    // Empty progress bar segment
+    lcd.createChar(6, filledBarChar);   // Filled progress bar segment
 
     displayMessage("  Waking Up...","");
     last_activity = millis();  // Reset activity timer after wake-up
@@ -256,6 +311,7 @@ void IRAM_ATTR handleFingerprint() {
     portENTER_CRITICAL(&mux);
     bool isPinVerified = pin_verified;
     Config::AuthMode mode = getAuthMode();
+    bool isPinLockedOut = is_pin_locked_out;
     portEXIT_CRITICAL(&mux);
     
     uint8_t fingerprintID = getFingerprintID();
@@ -276,7 +332,12 @@ void IRAM_ATTR handleFingerprint() {
                 verified_fingerprint_id = fingerprintID;
                 portEXIT_CRITICAL(&mux);
                 
-                displayMessage("Finger OK", "Enter PIN", 2000);
+                if (isPinLockedOut) {
+                    displayMessage("Finger Verified", "Wait for PIN");
+                    delay(2000);
+                } else {
+                    displayMessage("Fingerprint OK", "Enter PIN", 2000);
+                }
             }
         } else {
             portENTER_CRITICAL(&mux);
@@ -353,6 +414,26 @@ void IRAM_ATTR handleKeypad() {
     
     last_activity = now;
     lcd.backlight();
+
+    // Check for PIN lockout status immediately
+    if (is_pin_locked_out) {
+        if (millis() - pin_lockout_start < Config::LOCKOUT_TIME) {
+            unsigned long remainingTime = (Config::LOCKOUT_TIME - (millis() - pin_lockout_start)) / 1000;
+            // In 2FA mode, show that fingerprint is still available
+            if (getAuthMode() == Config::TWO_FACTOR && !is_fp_locked_out) {
+                displayMessage("PIN Locked Out", String(remainingTime) + "s");
+            } else {
+                displayMessage("PIN Locked " + String(remainingTime) + "s", "Use Fingerprint");
+            }
+            soundBuzzer(1);
+            delay(2000);
+            showReadyScreen();
+            return;
+        } else {
+            is_pin_locked_out = false;
+            wrong_pin_attempts = 0;
+        }
+    }
     
     // Rest of the existing handleKeypad code...
     if(key == '*') {
@@ -425,7 +506,63 @@ void IRAM_ATTR handleKeypad() {
 }
 
 void handleInactivity() {
-    (millis() - last_activity > Config::INACTIVITY_TIME) ? lcd.noBacklight() : lcd.backlight();
+    if (millis() - last_activity > Config::INACTIVITY_TIME) {
+        // First dim the LCD
+        lcd.noBacklight();
+        
+        // If another 5 seconds pass with no activity, go to deep sleep
+        if (millis() - last_activity > Config::INACTIVITY_TIME + 5000) {
+            // Prepare for deep sleep
+            displayMessage("Enter Sleep", "Mode...");
+            delay(1000);
+            lcd.noBacklight();
+            lcd.noDisplay();
+            
+            // Configure column pins as outputs driving HIGH and enable hold
+            for (uint8_t pin : {27, 14, 12}) {  // Column pins
+                pinMode(pin, OUTPUT);
+                digitalWrite(pin, HIGH);
+                rtc_gpio_init((gpio_num_t)pin);
+                rtc_gpio_set_direction((gpio_num_t)pin, RTC_GPIO_MODE_OUTPUT_ONLY);
+                rtc_gpio_set_level((gpio_num_t)pin, 1);
+                rtc_gpio_hold_en((gpio_num_t)pin);
+            }
+            
+            // Configure row pins (RTC-capable) for wake-up with strong pull-down
+            const uint64_t row_pin_mask = (1ULL << 32) | (1ULL << 33) | (1ULL << 25) | (1ULL << 26);
+            
+            // Configure each row pin using RTC GPIO functions
+            for (uint8_t pin : {32, 33, 25, 26}) {
+                rtc_gpio_init((gpio_num_t)pin);
+                rtc_gpio_set_direction((gpio_num_t)pin, RTC_GPIO_MODE_INPUT_ONLY);
+                rtc_gpio_pulldown_en((gpio_num_t)pin);
+                rtc_gpio_pullup_dis((gpio_num_t)pin);
+                rtc_gpio_hold_en((gpio_num_t)pin);
+            }
+            
+            // Enable wake-up on row pins going HIGH (when any key is pressed)
+            esp_sleep_enable_ext1_wakeup(row_pin_mask, ESP_EXT1_WAKEUP_ANY_HIGH);
+            
+            // Keep RTC peripherals powered
+            esp_sleep_pd_config(ESP_PD_DOMAIN_RTC_PERIPH, ESP_PD_OPTION_ON);
+            
+            Serial.println("Entering deep sleep...");
+            Serial.flush();
+            
+            // Release all RTC GPIO holds before sleep
+            rtc_gpio_hold_dis((gpio_num_t)27);
+            rtc_gpio_hold_dis((gpio_num_t)14);
+            rtc_gpio_hold_dis((gpio_num_t)12);
+            for (uint8_t pin : {32, 33, 25, 26}) {
+                rtc_gpio_hold_dis((gpio_num_t)pin);
+            }
+            
+            delay(100);
+            esp_deep_sleep_start();
+        }
+    } else {
+        lcd.backlight();
+    }
 }
 
 void displayMaskedInput() {
@@ -533,21 +670,40 @@ bool initFingerprint() {
 void showReadyScreen() {
     lcd.clear();
     lcd.setCursor(0, 0);
-    lcd.write(0);  // Lock character
+    
+    if (is_pin_locked_out || is_fp_locked_out) {
+        lcd.write(4);  // Error lock character
+    } else if (pin_verified && !fingerprint_verified && getAuthMode() == Config::TWO_FACTOR) {
+        lcd.write(3);  // Half-lock character for 2FA waiting state
+    } else {
+        lcd.write(0);  // Normal lock character
+    }
     lcd.print("    Ready");
+
+    // In 2FA mode, show verification status with progress bars
+    if (getAuthMode() == Config::TWO_FACTOR) {
+        lcd.setCursor(0, 1);
+        lcd.print("P:");
+        // Display three segments for PIN progress
+        for (int i = 0; i < 3; i++) {
+            lcd.write(pin_verified ? 6 : 5);  // filled or empty progress bar segment
+        }
+        lcd.print(" F:");
+        // Display three segments for Fingerprint progress
+        for (int i = 0; i < 3; i++) {
+            lcd.write(fingerprint_verified ? 6 : 5);  // filled or empty progress bar segment
+        }
+    }
 }
 
 uint8_t getFingerprintID() {
     // Check if fingerprint is locked out but still allow PIN input in 2FA mode
     if (is_fp_locked_out) {
         if (millis() - fp_lockout_start < Config::LOCKOUT_TIME) {
-            // Don't block PIN input in 2FA mode, just return 0 to indicate no fingerprint match
-            if (getAuthMode() == Config::TWO_FACTOR && !pin_verified) {
-                return 0;
-            }
             // Only show lockout message if actively trying to use fingerprint
             if (finger.getImage() == FINGERPRINT_OK) {
-                displayMessage("FP Locked Out", String((Config::LOCKOUT_TIME - (millis() - fp_lockout_start)) / 1000) + "s");
+                unsigned long remainingTime = (Config::LOCKOUT_TIME - (millis() - fp_lockout_start)) / 1000;
+                displayMessage("FP Locked Out", String(remainingTime) + "s");
                 soundBuzzer(1);
                 delay(2000);
                 showReadyScreen();
@@ -573,17 +729,18 @@ uint8_t getFingerprintID() {
     if (finger.fingerFastSearch() != FINGERPRINT_OK) {
         portENTER_CRITICAL(&mux);
         wrong_fp_attempts++;
+        int remaining_attempts = Config::MAX_WRONG_ATTEMPTS - wrong_fp_attempts;
         
         if (wrong_fp_attempts >= Config::MAX_WRONG_ATTEMPTS) {
             is_fp_locked_out = true;
             fp_lockout_start = millis();
             portEXIT_CRITICAL(&mux);
-            displayMessage("Too many tries!", "FP Locked 30s");
+            displayMessage("FP Locked 30s", "FP Locked 30s");
             soundBuzzer(3); // Use alarm sound
             delay(2000);
         } else {
             portEXIT_CRITICAL(&mux);
-            displayMessage("    No Match"," Access Denied");
+            displayMessage("No Match", String(remaining_attempts) + " tries left");
             soundBuzzer(1);
             delay(2000);
         }
@@ -707,7 +864,13 @@ void IRAM_ATTR checkPassword() {
     // Check if PIN is locked out
     if (is_pin_locked_out) {
         if (millis() - pin_lockout_start < Config::LOCKOUT_TIME) {
-            displayMessage("PIN Locked Out", String((Config::LOCKOUT_TIME - (millis() - pin_lockout_start)) / 1000) + "s");
+            unsigned long remainingTime = (Config::LOCKOUT_TIME - (millis() - pin_lockout_start)) / 1000;
+            // In 2FA mode, show that fingerprint is still available
+            if (getAuthMode() == Config::TWO_FACTOR && !is_fp_locked_out) {
+                displayMessage("PIN Locked Out", String(remainingTime) + "s");
+            } else {
+                displayMessage("PIN Locked " + String(remainingTime) + "s", "Use Fingerprint");
+            }
             soundBuzzer(1);
             delay(2000);
             showReadyScreen();
@@ -764,6 +927,7 @@ void IRAM_ATTR checkPassword() {
     } else {
         portENTER_CRITICAL(&mux);
         wrong_pin_attempts++;
+        int remaining_attempts = Config::MAX_WRONG_ATTEMPTS - wrong_pin_attempts;
         
         if (wrong_pin_attempts >= Config::MAX_WRONG_ATTEMPTS) {
             is_pin_locked_out = true;
@@ -773,13 +937,13 @@ void IRAM_ATTR checkPassword() {
             if (getAuthMode() == Config::TWO_FACTOR && !is_fp_locked_out) {
                 displayMessage("PIN Locked 30s", "Use Fingerprint");
             } else {
-                displayMessage("Too many tries!", "PIN Locked 30s");
+                displayMessage("PIN Locked 30s", "PIN Locked 30s");
             }
             soundBuzzer(3); // Use alarm sound
             delay(2000);
         } else {
             portEXIT_CRITICAL(&mux);
-            displayMessage("      PIN:","    Invalid");
+            displayMessage("Invalid PIN", String(remaining_attempts) + " tries left");
             soundBuzzer(1);
             delay(2000);
         }
