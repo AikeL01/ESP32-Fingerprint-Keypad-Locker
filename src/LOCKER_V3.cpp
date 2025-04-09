@@ -11,8 +11,11 @@ struct PinConfig {
     static constexpr uint8_t RELAY = 13;
     static constexpr uint8_t FP_RX = 16;
     static constexpr uint8_t FP_TX = 17;
-    static constexpr uint8_t BUZZER = 5;
+    static constexpr uint8_t BUZZER = 4;  // Using GPIO 32 for buzzer
     static constexpr uint8_t I2C_ADDR = 0x27;
+    static constexpr uint8_t BUZZER_CHANNEL = 0;  // LEDC channel for buzzer
+    static constexpr uint8_t BUZZER_RESOLUTION = 8;  // 8-bit resolution
+    static constexpr uint32_t BUZZER_BASE_FREQ = 2000;  // Base frequency in Hz
 };
 
 struct Config {
@@ -21,17 +24,16 @@ struct Config {
     static constexpr uint16_t EEPROM_SIZE = 32;
     
     // Timing constants (ms)
-    static constexpr unsigned long LOCKOUT_TIME = 300000;     // Increased to 5 minutes for better security
-    static constexpr unsigned long INACTIVITY_TIME = 8000;    // Power saving timeout
-    static constexpr uint16_t DEEP_SLEEP_DELAY = 16000;      // Time before deep sleep
+    static constexpr unsigned long INACTIVITY_TIME = 8000;    // Screen timeout
     static constexpr uint16_t FINGERPRINT_TIMEOUT_MS = 10000; // Fingerprint operation timeout
     static constexpr unsigned long UNLOCK_TIME = 3000;        // Door unlock duration in ms
+    static constexpr unsigned long LOCKOUT_TIME = 30000;      // Lockout duration in ms
     
     // Security parameters
-    static constexpr uint8_t MAX_ATTEMPTS = 5;
     static constexpr uint8_t PIN_LENGTH = 6;
     static constexpr uint8_t STAR_THRESHOLD = 12;
     static constexpr uint8_t AUTH_MODE_ADDR = 10;
+    static constexpr uint8_t MAX_WRONG_ATTEMPTS = 5;         // Maximum wrong attempts before lockout
     static constexpr char DEFAULT_PIN[7] = "123456";  // More secure default
     
     enum AuthMode {
@@ -59,16 +61,13 @@ byte rowPins[ROWS] = {32,33,25,26}, colPins[COLS] = {27,14,12};
 SimpleKeypad keypad(keys, rowPins, colPins, ROWS, COLS);
 
 // Add scanning delay configuration
-const unsigned long KEY_SCAN_INTERVAL = 20; // 20ms between scans
-const unsigned long DEBOUNCE_DELAY = 50;    // 50ms debounce
+const unsigned long KEY_SCAN_INTERVAL = 50; // 50ms between scans
 
 // State variables using fixed buffer for better memory management
 char input_password[Config::PIN_LENGTH + 1];  // +1 for null terminator
 uint8_t input_length = 0;
 int wrong_attempts = 0;
-bool lockout_mode = false;
 unsigned long last_activity = 0;
-unsigned long lockout_start = 0;
 int star_count = 0;
 int hash_count = 0;  // Counter for # presses
 
@@ -80,19 +79,25 @@ bool pin_verified = false;
 bool fingerprint_verified = false;
 uint8_t verified_fingerprint_id = 0;
 
+// Add after other state variables
+int wrong_pin_attempts = 0;
+int wrong_fp_attempts = 0;
+unsigned long pin_lockout_start = 0;
+unsigned long fp_lockout_start = 0;
+bool is_pin_locked_out = false;
+bool is_fp_locked_out = false;
+
 // Function declarations
 void showReadyScreen();
 void IRAM_ATTR unlockDoor();
 void displayMessage(String line1, String line2, int delayTime = 0);
 void IRAM_ATTR checkPassword();
-void activateLockoutMode();
 void enrollFingerprint();
 void deleteFingerprint();
 String getInput(String prompt, char confirmKey, char clearKey, bool maskInput = true);
 void setupPins();
 void setupLCD();
 void setupFingerprintSensor();
-void handleLockoutMode();
 void IRAM_ATTR handleFingerprint();
 void IRAM_ATTR handleKeypad();
 void handleInactivity();
@@ -103,32 +108,28 @@ void changePassword();
 bool getFingerprintEnroll(uint8_t id);
 uint8_t getFingerprintID();
 bool initFingerprint();
-void handleHibernation();
-bool captureFingerprintImage(uint8_t bufferID);
+void playTone(const uint16_t freq, const uint32_t dur);
+void noTone();
 void setAuthMode(Config::AuthMode mode);
 Config::AuthMode getAuthMode();
-void enterLightSleep();
 
 void setup() {
     // Initialize Serial communication
     Serial.begin(115200);
     Serial.println("System starting...");
     
-    // Set CPU frequency to 80MHz to save power while maintaining good performance
-    setCpuFrequencyMhz(80);
-    
     // Initialize EEPROM with minimal size needed
     EEPROM.begin(Config::EEPROM_SIZE);
     
     setupPins();
     
-    // Re-initialize I2C and LCD after deep sleep
+    // Initialize I2C and LCD
     Wire.begin();
     delay(100);  // Give I2C bus time to stabilize
     
     lcd.begin();
-    lcd.display();  // Ensure display is on
-    lcd.backlight();  // Turn on backlight
+    lcd.display();
+    lcd.backlight();
     lcd.createChar(0, lockChar);
     lcd.createChar(1, unlockChar);
     lcd.createChar(2, fingerChar);
@@ -137,41 +138,25 @@ void setup() {
     
     // Initialize default password if EEPROM is empty
     if (EEPROM.read(0) == 0xFF) {
-        // Write default password 123456
         setPassword("123456");
         EEPROM.commit();
     }
-    
-    // Configure GPIO 34 as wake-up source with pull-up
-    gpio_pullup_en((gpio_num_t)34);
-    gpio_pulldown_dis((gpio_num_t)34);
-    
-    // Configure sleep wakeup sources (deep sleep)
-    esp_sleep_enable_ext0_wakeup((gpio_num_t)34, 1);  // Wake up when GPIO34 goes HIGH
-    esp_sleep_enable_timer_wakeup(Config::DEEP_SLEEP_DELAY * 1000ULL);
     
     showReadyScreen();
     last_activity = millis();
 }
 
 void IRAM_ATTR loop() {
-    // Critical tasks with higher priority
-    portENTER_CRITICAL(&mux);
-    if (lockout_mode) {
-        handleLockoutMode();
-        portEXIT_CRITICAL(&mux);
-        return;
-    }
-    portEXIT_CRITICAL(&mux);
-
-    // Check for serial commands
+    // Critical section for state management
+    static uint32_t lastInactivityCheck = 0;
+    uint32_t now = millis();
+    
+    // Serial handling non-critical, move outside critical section
     if (Serial.available()) {
         String command = Serial.readStringUntil('\n');
         command.trim();
-        
         if (command == "readpass") {
-            String storedPass = getPassword();
-            Serial.println("Stored password: " + storedPass);
+            Serial.println("Stored password: " + getPassword());
         }
     }
 
@@ -179,32 +164,23 @@ void IRAM_ATTR loop() {
     handleKeypad();
     handleFingerprint();
     
-    // Less critical tasks
-    static uint32_t lastInactivityCheck = 0;
-    if (millis() - lastInactivityCheck >= 1000) {  // Check every second
+    // Less critical tasks with optimized timing
+    if (now - lastInactivityCheck >= 1000) {
         handleInactivity();
-        lastInactivityCheck = millis();
+        lastInactivityCheck = now;
     }
 
-    // Power management task
-    static uint32_t lastPowerCheck = 0;
-    if (millis() - lastPowerCheck >= 2000) {  // Check every 2 seconds
-        if (millis() - last_activity > Config::INACTIVITY_TIME * 2) {
-            handleHibernation();
-        }
-        lastPowerCheck = millis();
-    }
-    
-    // Reduced delay for better responsiveness
-    delay(5);
+    // Use shorter delay to improve responsiveness while maintaining power efficiency
+    delayMicroseconds(100);
 }
 
 void setupPins() {
     pinMode(PinConfig::RELAY, OUTPUT);
     digitalWrite(PinConfig::RELAY, HIGH);
 
+    // Configure buzzer pin for digital output
     pinMode(PinConfig::BUZZER, OUTPUT);
-    digitalWrite(PinConfig::BUZZER, LOW);  // Ensure buzzer is off
+    digitalWrite(PinConfig::BUZZER, LOW);  // Initialize MOSFET off
 
     // Configure keypad pins - start with columns as inputs with pull-ups
     for(byte i = 0; i < COLS; i++) {
@@ -216,6 +192,11 @@ void setupPins() {
         pinMode(rowPins[i], OUTPUT);
         digitalWrite(rowPins[i], LOW);
     }
+
+    // Configure buzzer pin for PWM output using LEDC
+    ledcSetup(PinConfig::BUZZER_CHANNEL, PinConfig::BUZZER_BASE_FREQ, PinConfig::BUZZER_RESOLUTION);
+    ledcAttachPin(PinConfig::BUZZER, PinConfig::BUZZER_CHANNEL);
+    ledcWrite(PinConfig::BUZZER_CHANNEL, 0);  // Start with buzzer off
 }
 
 void setupLCD() {
@@ -264,66 +245,49 @@ void displaySensorParameters() {
     }
 }
 
-void handleLockoutMode() {
-    static bool init = true;
-    if (millis() - lockout_start >= Config::LOCKOUT_TIME) {
-        lockout_mode = init = false;
-        wrong_attempts = 0;
-        last_activity = millis();  // Reset activity timer after lockout ends
-        showReadyScreen();
-        return;
-    }
-    
-    int bar = ((Config::LOCKOUT_TIME - (millis() - lockout_start)) * 16) / Config::LOCKOUT_TIME;
-    if (init) {
-        lcd.clear();
-        lcd.print("    Lockout:");
-        init = false;
-    }
-    lcd.setCursor(0, 1);
-    for(byte i = 0; i < 16; i++) lcd.write(i < bar ? 0xFF : 32);
-}
-
 void IRAM_ATTR handleFingerprint() {
     static uint32_t lastCheck = 0;
-    uint32_t now = millis();
+    const uint32_t minCheckInterval = 100; // 100ms between checks for power efficiency
     
-    // Throttle fingerprint checks to save power
-    if (now - lastCheck < 100) return;  // Check max 10 times per second
+    uint32_t now = millis();
+    if (now - lastCheck < minCheckInterval) return;
     lastCheck = now;
+    
+    portENTER_CRITICAL(&mux);
+    bool isPinVerified = pin_verified;
+    Config::AuthMode mode = getAuthMode();
+    portEXIT_CRITICAL(&mux);
     
     uint8_t fingerprintID = getFingerprintID();
     if (fingerprintID != 0) {
-        if (getAuthMode() == Config::TWO_FACTOR) {
-            if (pin_verified) {
-                // PIN was already verified, grant access
+        if (mode == Config::TWO_FACTOR) {
+            if (isPinVerified) {
                 portENTER_CRITICAL(&mux);
                 wrong_attempts = 0;
-                pin_verified = false;  // Reset state
+                pin_verified = false;
                 fingerprint_verified = false;
                 portEXIT_CRITICAL(&mux);
                 
-                displayMessage("ID #" + String(fingerprintID) + " Match!", "Access Granted");
+                displayMessage("ID #" + String(fingerprintID), "Access Granted");
                 unlockDoor();
-                showReadyScreen();
             } else {
-                // Store fingerprint verification and wait for PIN
+                portENTER_CRITICAL(&mux);
                 fingerprint_verified = true;
                 verified_fingerprint_id = fingerprintID;
-                displayMessage("Fingerprint OK", "Enter PIN", 2000);
-                showReadyScreen();
+                portEXIT_CRITICAL(&mux);
+                
+                displayMessage("Finger OK", "Enter PIN", 2000);
             }
         } else {
-            // Single factor mode - grant access immediately
             portENTER_CRITICAL(&mux);
             wrong_attempts = 0;
             portEXIT_CRITICAL(&mux);
             
-            displayMessage("ID #" + String(fingerprintID) + " Match!", "Access Granted");
+            displayMessage("ID #" + String(fingerprintID), "Access Granted");
             unlockDoor();
-            showReadyScreen();
         }
         last_activity = now;
+        showReadyScreen();
     }
 }
 
@@ -461,11 +425,7 @@ void IRAM_ATTR handleKeypad() {
 }
 
 void handleInactivity() {
-    if (millis() - last_activity > Config::INACTIVITY_TIME) {
-        lcd.noBacklight();
-    } else {
-        lcd.backlight();
-    }
+    (millis() - last_activity > Config::INACTIVITY_TIME) ? lcd.noBacklight() : lcd.backlight();
 }
 
 void displayMaskedInput() {
@@ -475,32 +435,83 @@ void displayMaskedInput() {
         lcd.clear();
         lcd.setCursor(0, 0);
         lcd.print("      PIN:");
-        lcd.setCursor(5, 1);  // Start masked input at the 6th column
-        for (int i = 0; i < input_length; i++) {
-            lcd.print("*");
-        }
+        lcd.setCursor(5, 1);
+        for(int i = 0; i < input_length; i++) lcd.print("*");
         lastInput = currentInput;
     }
 }
 
+void playTone(const uint16_t freq, const uint32_t dur) {
+    ledcSetup(PinConfig::BUZZER_CHANNEL, static_cast<uint32_t>(freq), PinConfig::BUZZER_RESOLUTION);
+    ledcWrite(PinConfig::BUZZER_CHANNEL, 127); // 50% duty cycle
+    delay(dur);
+    ledcWrite(PinConfig::BUZZER_CHANNEL, 0);
+}
+
+void noTone() {
+    ledcWrite(PinConfig::BUZZER_CHANNEL, 0);
+}
+
 void soundBuzzer(int pattern) {
-    static const int patterns[][2] = {
-        {1000, 2000}, // Success
-        {300, 0},     // Error  
-        {500, 500},   // Warning
-        {800, 600}    // Alarm
+    struct BuzzerPattern {
+        uint16_t frequency;  // Frequency in Hz
+        uint16_t duration;   // Duration in ms
+        uint16_t pause;      // Pause after beep in ms
+        uint8_t count;       // Number of beeps
     };
     
-    static const int repeats[] = {1,1,2,5};
+    static const BuzzerPattern patterns[] = {
+        {2000, 100, 100, 2},  // Success - high pitched ascending beeps
+        {400, 200, 100, 3},   // Error - very low pitched beeps (changed from 1000 to 400 Hz)
+        {1500, 150, 200, 2},  // Warning - medium pitched alternating beeps
+        {800, 100, 50, 9}     // Alarm - SOS pattern with low pitch
+    };
     
-    for(int i = 0; i < repeats[pattern]; i++) {
-        tone(PinConfig::BUZZER, patterns[pattern][0], 100);
-        delay(100);
-        if(patterns[pattern][1]) {
-            tone(PinConfig::BUZZER, patterns[pattern][1], 100);
-            delay(100);
-        }
+    switch(pattern) {
+        case 0: // Success - ascending beeps
+            playTone(1800, patterns[0].duration);
+            delay(patterns[0].pause);
+            playTone(2000, patterns[0].duration);
+            break;
+            
+        case 1: // Error - low pitched beeps
+            for(int i = 0; i < patterns[1].count; i++) {
+                playTone(400 - (i * 50), patterns[1].duration); // Starting at 400Hz and going lower
+                delay(patterns[1].pause);
+            }
+            break;
+            
+        // ...existing warning and alarm cases...
+        case 2: // Warning - alternating beeps
+            for(int i = 0; i < patterns[2].count; i++) {
+                playTone(i % 2 ? 1200 : 1800, patterns[2].duration);
+                delay(patterns[2].pause);
+            }
+            break;
+            
+        case 3: // Alarm - SOS pattern
+            // 3 short beeps
+            for(int i = 0; i < 3; i++) {
+                playTone(800, 100);
+                delay(100);
+            }
+            delay(200);
+            
+            // 3 long beeps
+            for(int i = 0; i < 3; i++) {
+                playTone(800, 300);
+                delay(100);
+            }
+            delay(200);
+            
+            // 3 short beeps
+            for(int i = 0; i < 3; i++) {
+                playTone(800, 100);
+                delay(100);
+            }
+            break;
     }
+    ledcWrite(PinConfig::BUZZER_CHANNEL, 0); // Ensure buzzer is off after pattern
 }
 
 void displayMessage(String line1, String line2, int delayTime) {
@@ -509,22 +520,14 @@ void displayMessage(String line1, String line2, int delayTime) {
     lcd.print(line1);
     lcd.setCursor(0, 1);
     lcd.print(line2);
-    if (delayTime > 0) delay(delayTime);
+    delayTime > 0 ? delay(delayTime) : (void)0;
 }
 
 bool initFingerprint() {
-    if (finger.verifyPassword()) {
-        finger.getParameters(); // Cache parameters
-        return true;
-    }
-
-    displayMessage("Sensor Error!", "Trying alt pass...");
-    finger.setPassword(0x00000000);
-    if (finger.verifyPassword()) {
-        finger.getParameters(); // Cache parameters
-        return true;
-    }
-    return false;
+    return finger.verifyPassword() ? (finger.getParameters(), true) :
+           (displayMessage("Sensor Error!", "Trying alt pass..."),
+            finger.setPassword(0x00000000),
+            finger.verifyPassword() ? (finger.getParameters(), true) : false);
 }
 
 void showReadyScreen() {
@@ -535,37 +538,64 @@ void showReadyScreen() {
 }
 
 uint8_t getFingerprintID() {
-    uint8_t p = finger.getImage();
-    if (p != FINGERPRINT_OK) return 0;
+    // Check if fingerprint is locked out but still allow PIN input in 2FA mode
+    if (is_fp_locked_out) {
+        if (millis() - fp_lockout_start < Config::LOCKOUT_TIME) {
+            // Don't block PIN input in 2FA mode, just return 0 to indicate no fingerprint match
+            if (getAuthMode() == Config::TWO_FACTOR && !pin_verified) {
+                return 0;
+            }
+            // Only show lockout message if actively trying to use fingerprint
+            if (finger.getImage() == FINGERPRINT_OK) {
+                displayMessage("FP Locked Out", String((Config::LOCKOUT_TIME - (millis() - fp_lockout_start)) / 1000) + "s");
+                soundBuzzer(1);
+                delay(2000);
+                showReadyScreen();
+            }
+            return 0;
+        } else {
+            is_fp_locked_out = false;
+            wrong_fp_attempts = 0;
+        }
+    }
+
+    if (finger.getImage() != FINGERPRINT_OK) return 0;
 
     displayMessage("  Processing...","");
-
     last_activity = millis();
 
-    p = finger.image2Tz();
-    if (p != FINGERPRINT_OK) {
+    if (finger.image2Tz() != FINGERPRINT_OK) {
         displayMessage("Image Error","Try again", 1500);
         showReadyScreen();
         return 0;
     }
 
-    p = finger.fingerFastSearch();
-    if (p != FINGERPRINT_OK) {
-        displayMessage("    No Match"," Access Denied");
-        soundBuzzer(1);  // Short error beep
+    if (finger.fingerFastSearch() != FINGERPRINT_OK) {
+        portENTER_CRITICAL(&mux);
+        wrong_fp_attempts++;
         
-        wrong_attempts++;
-        
-        if (wrong_attempts >= Config::MAX_ATTEMPTS) {
-            activateLockoutMode();
-        } else {
+        if (wrong_fp_attempts >= Config::MAX_WRONG_ATTEMPTS) {
+            is_fp_locked_out = true;
+            fp_lockout_start = millis();
+            portEXIT_CRITICAL(&mux);
+            displayMessage("Too many tries!", "FP Locked 30s");
+            soundBuzzer(3); // Use alarm sound
             delay(2000);
-            showReadyScreen();
+        } else {
+            portEXIT_CRITICAL(&mux);
+            displayMessage("    No Match"," Access Denied");
+            soundBuzzer(1);
+            delay(2000);
         }
-        
+        showReadyScreen();
         return 0;
     }
 
+    // Reset wrong attempts on successful match
+    portENTER_CRITICAL(&mux);
+    wrong_fp_attempts = 0;
+    portEXIT_CRITICAL(&mux);
+    
     return finger.fingerID;
 }
 
@@ -595,7 +625,7 @@ String getInput(String prompt, char confirmKey, char clearKey, bool maskInput) {
                 lcd.setCursor(0, 1);
             } else {
                 input += key;
-                String displayChar = maskInput ? String("*") : String(key);
+                String displayChar = String(maskInput ? '*' : key);
                 lcd.print(displayChar);
             }
         }
@@ -611,19 +641,15 @@ int getIDFromInput() {
 
 void enrollFingerprint() {
     displayMessage("Enrollment Mode", "Enter ID:#");
-
     int id = getIDFromInput();
 
     if (id == 0) {
         displayMessage("ID #0 Invalid!", "Try Again", 2000);
         showReadyScreen();
-        return;
+    } else {
+        displayMessage("Enrolling ID:" + String(id), "Place Finger");
+        getFingerprintEnroll(id);
     }
-
-    displayMessage("Enrolling ID:" + String(id), "Place Finger");
-
-    while (!getFingerprintEnroll(id))
-        ;
 
     last_activity = millis();  // Reset activity timer after enrollment
     showReadyScreen();
@@ -632,13 +658,11 @@ void enrollFingerprint() {
 bool captureFingerprintImage(uint8_t bufferID) {
     unsigned long startTime = millis();
     uint8_t p;
-    while ((millis() - startTime) < Config::FINGERPRINT_TIMEOUT_MS) { // Timeout based on Config
+    while ((millis() - startTime) < Config::FINGERPRINT_TIMEOUT_MS) {
         if ((p = finger.getImage()) == FINGERPRINT_OK) {
-            if (finger.image2Tz(bufferID) != FINGERPRINT_OK) {
-                displayMessage("Image Error", "Try Again", 2000);
-                return false;
-            }
-            return true;
+            return (finger.image2Tz(bufferID) == FINGERPRINT_OK) ? 
+                   true : 
+                   (displayMessage("Image Error", "Try Again", 2000), false);
         }
         delay(100);
     }
@@ -647,124 +671,128 @@ bool captureFingerprintImage(uint8_t bufferID) {
 }
 
 bool getFingerprintEnroll(uint8_t id) {
-    if (!captureFingerprintImage(1)) {
-        return false;
-    }
+    if (!captureFingerprintImage(1)) return false;
 
     displayMessage("Got Image!", "Remove Finger");
     
-    // Wait for finger removal with timeout
+    // Wait for finger removal
     unsigned long startTime = millis();
-    while ((millis() - startTime) < 5000) { // 5 second timeout
+    while ((millis() - startTime) < 5000) {
         if (finger.getImage() == FINGERPRINT_NOFINGER) {
-            delay(1000); // Give user time to fully remove finger
+            delay(1000);  // Give time to fully remove finger
             break;
         }
         delay(100);
     }
 
     displayMessage("Place Same", "Finger Again");
-    
-    if (!captureFingerprintImage(2)) {
-        return false;
-    }
-
-    displayMessage("Processing...", "Please Wait");
-    uint8_t p = finger.createModel();
-    if (p != FINGERPRINT_OK) {
-        displayMessage("Failed!", "Try Again", 2000);
-        return false;
-    }
-
-    p = finger.storeModel(id);
-    if (p != FINGERPRINT_OK) {
-        displayMessage("Storage Failed!", "Try Again", 2000);
-        return false;
-    }
-
-    displayMessage("Success!", "ID #" + String(id), 2000);
-    return true;
+    return !captureFingerprintImage(2) ? false :
+           (displayMessage("Processing...", "Please Wait"),
+            finger.createModel() != FINGERPRINT_OK ? 
+            (displayMessage("Failed!", "Try Again", 2000), false) :
+            finger.storeModel(id) != FINGERPRINT_OK ? 
+            (displayMessage("Storage Failed!", "Try Again", 2000), false) :
+            (displayMessage("Success!", "ID #" + String(id), 2000), true));
 }
 
 void deleteFingerprint() {
     int id = getIDFromInput();
-
-    if (finger.deleteModel(id) == FINGERPRINT_OK) {
-        displayMessage("Deleted ID:", String(id), 2000);
-    } else {
+    (finger.deleteModel(id) == FINGERPRINT_OK) ? 
+        displayMessage("Deleted ID:", String(id), 2000) : 
         displayMessage("Failed to Delete", "Try Again", 2000);
-    }
-
     showReadyScreen();
 }
 
 void IRAM_ATTR checkPassword() {
-    String storedPassword = getPassword();
-    String currentInput = String(input_password).substring(0, input_length);
-    
-    if (currentInput.length() != storedPassword.length()) {
-        wrong_attempts++;
-        if (wrong_attempts >= Config::MAX_ATTEMPTS) {
-            activateLockoutMode();
-        } else {
-            displayMessage("Invalid Length", String(currentInput.length()) + "!=" + String(storedPassword.length()), 2000);
+    // Check if PIN is locked out
+    if (is_pin_locked_out) {
+        if (millis() - pin_lockout_start < Config::LOCKOUT_TIME) {
+            displayMessage("PIN Locked Out", String((Config::LOCKOUT_TIME - (millis() - pin_lockout_start)) / 1000) + "s");
             soundBuzzer(1);
+            delay(2000);
+            showReadyScreen();
+            return;
+        } else {
+            is_pin_locked_out = false;
+            wrong_pin_attempts = 0;
         }
-        input_length = 0;
-        if (!lockout_mode) showReadyScreen();
-        return;
+    }
+
+    char storedPass[Config::PIN_LENGTH + 1];
+    memset(storedPass, 0, sizeof(storedPass));
+    
+    portENTER_CRITICAL(&mux);
+    for (int i = 0; i < Config::PIN_LENGTH; i++) {
+        storedPass[i] = EEPROM.read(i);
+    }
+    portEXIT_CRITICAL(&mux);
+    
+    bool match = true;
+    for (int i = 0; i < input_length && i < Config::PIN_LENGTH; i++) {
+        match = (input_password[i] == storedPass[i]) ? match : false;
     }
     
-    if (currentInput == storedPassword) {
+    if (match && input_length == Config::PIN_LENGTH) {
         if (getAuthMode() == Config::TWO_FACTOR) {
             if (fingerprint_verified) {
                 // Fingerprint was already verified, grant access
-                displayMessage("  PIN Verified", " Access Granted");
-                wrong_attempts = 0;
-                pin_verified = false;  // Reset state
+                portENTER_CRITICAL(&mux);
+                wrong_pin_attempts = 0;
+                pin_verified = false;
                 fingerprint_verified = false;
+                portEXIT_CRITICAL(&mux);
+                displayMessage(" PIN Verified", " Access Granted");
                 unlockDoor();
+            } else if (is_fp_locked_out) {
+                // If fingerprint is locked out, still allow PIN verification
+                pin_verified = true;
+                displayMessage("PIN Verified", "Wait for FP", 2000);
+                showReadyScreen();
             } else {
-                // Store PIN verification and wait for fingerprint
                 pin_verified = true;
                 displayMessage("PIN Verified", "Place Finger", 2000);
                 showReadyScreen();
             }
         } else {
-            // Single factor mode - grant access immediately
+            // In single factor mode, correct PIN always grants access
+            portENTER_CRITICAL(&mux);
+            wrong_pin_attempts = 0;
+            portEXIT_CRITICAL(&mux);
             displayMessage("     Access","    Granted");
-            wrong_attempts = 0;
             unlockDoor();
         }
     } else {
-        wrong_attempts++;
-        if (wrong_attempts >= Config::MAX_ATTEMPTS) {
-            activateLockoutMode();
+        portENTER_CRITICAL(&mux);
+        wrong_pin_attempts++;
+        
+        if (wrong_pin_attempts >= Config::MAX_WRONG_ATTEMPTS) {
+            is_pin_locked_out = true;
+            pin_lockout_start = millis();
+            portEXIT_CRITICAL(&mux);
+            // Even when PIN is locked, show a message indicating fingerprint is still available
+            if (getAuthMode() == Config::TWO_FACTOR && !is_fp_locked_out) {
+                displayMessage("PIN Locked 30s", "Use Fingerprint");
+            } else {
+                displayMessage("Too many tries!", "PIN Locked 30s");
+            }
+            soundBuzzer(3); // Use alarm sound
+            delay(2000);
         } else {
+            portEXIT_CRITICAL(&mux);
             displayMessage("      PIN:","    Invalid");
             soundBuzzer(1);
             delay(2000);
         }
     }
+    
+    memset(storedPass, 0, sizeof(storedPass));
     input_length = 0;
-    if (!lockout_mode) showReadyScreen();
-}
-
-void activateLockoutMode() {
-    lockout_mode = true;
-    lockout_start = millis();
-    soundBuzzer(3);  // Long alarm pattern
+    showReadyScreen();
 }
 
 void setPassword(const String &newPassword) {
-    // Clear the password area first
     for (int i = 0; i < Config::PIN_LENGTH; i++) {
-        EEPROM.write(i, 0);
-    }
-    
-    // Write new password
-    for (int i = 0; i < newPassword.length() && i < Config::PIN_LENGTH; i++) {
-        EEPROM.write(i, newPassword[i]);
+        EEPROM.write(i, i < newPassword.length() ? newPassword[i] : 0);
     }
     EEPROM.commit();
 }
@@ -773,60 +801,27 @@ String getPassword() {
     String password = "";
     for (int i = 0; i < Config::PIN_LENGTH; i++) {
         char c = EEPROM.read(0 + i);
-        if (c == 0) break;  // Stop at null terminator
+        if (c == 0) break;
         password += c;
     }
     return password;
 }
 
 void changePassword() {
-    String currentPassword = getInput("  Current PIN:",'#','*', true);  // true for masking PIN
+    String currentPassword = getInput("  Current PIN:",'#','*', true);
     if (currentPassword != getPassword()) {
         displayMessage("   PIN Error","",2000);
         showReadyScreen();
         return;
     }
-
-    String newPassword = getInput("    New PIN:", '#', '*', true);  // true for masking PIN
-    if (newPassword.length() > 0 && newPassword.length() <= Config::PIN_LENGTH) {
-        setPassword(newPassword);
-        displayMessage("  PIN Updated","",2000);
-    } else {
+    
+    String newPassword = getInput("    New PIN:", '#', '*', true);
+    (newPassword.length() > 0 && newPassword.length() <= Config::PIN_LENGTH) ?
+        (setPassword(newPassword), displayMessage("  PIN Updated","",2000)) :
         displayMessage("   PIN Error","   No Change",2000);
-    }
-    last_activity = millis();  // Reset activity timer after PIN change
+    
+    last_activity = millis();
     showReadyScreen();
-}
-
-void handleHibernation() {
-    // Power down peripherals before deep sleep
-    Wire.end();  // Shutdown I2C
-    fingerprintSerial.end();  // Shutdown UART
-    
-    lcd.noBacklight();
-    displayMessage(" Hibernating...", "", 1000);
-    lcd.noDisplay();  // Turn off LCD display
-    
-    // Configure deep sleep power domains
-    esp_sleep_pd_config(ESP_PD_DOMAIN_RTC_PERIPH, ESP_PD_OPTION_ON);  // Keep RTC peripherals on
-    esp_sleep_pd_config(ESP_PD_DOMAIN_RTC_SLOW_MEM, ESP_PD_OPTION_OFF);
-    esp_sleep_pd_config(ESP_PD_DOMAIN_RTC_FAST_MEM, ESP_PD_OPTION_OFF);
-    esp_sleep_pd_config(ESP_PD_DOMAIN_XTAL, ESP_PD_OPTION_OFF);
-    
-    // Configure GPIO 34 as wake-up source with pull-up
-    gpio_pullup_en((gpio_num_t)34);
-    gpio_pulldown_dis((gpio_num_t)34);
-    
-    // Configure wake-up sources
-    esp_sleep_enable_ext0_wakeup((gpio_num_t)34, 1);  // Wake up when GPIO34 goes HIGH
-    esp_sleep_enable_timer_wakeup(Config::DEEP_SLEEP_DELAY * 1000ULL);
-    
-    esp_deep_sleep_start();
-}
-
-void enterLightSleep() {
-    esp_sleep_enable_timer_wakeup(1000000);  // 1 second
-    esp_light_sleep_start();
 }
 
 void setAuthMode(Config::AuthMode mode) {
@@ -836,5 +831,5 @@ void setAuthMode(Config::AuthMode mode) {
 
 Config::AuthMode getAuthMode() {
     uint8_t mode = EEPROM.read(Config::AUTH_MODE_ADDR);
-    return mode == Config::TWO_FACTOR ? Config::TWO_FACTOR : Config::SINGLE_FACTOR;
+    return (mode == Config::TWO_FACTOR) ? Config::TWO_FACTOR : Config::SINGLE_FACTOR;
 }
