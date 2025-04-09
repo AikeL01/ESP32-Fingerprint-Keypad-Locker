@@ -60,8 +60,10 @@ byte unlockChar[8] = {0b01110,0b10000,0b10000,0b11111,0b11011,0b11011,0b11111,0b
 byte fingerChar[8] = {0b00000,0b00000,0b01110,0b11111,0b11111,0b11111,0b01110,0b00000};
 byte halfLockChar[8] = {0b01110,0b10001,0b10000,0b11111,0b11011,0b11011,0b11111,0b00000}; // Half-lock for 2FA waiting
 byte errorLockChar[8] = {0b01110,0b10101,0b10001,0b11111,0b11011,0b11011,0b11111,0b00000}; // Error lock with X pattern
-byte emptyBarChar[8] = {B11111,B10001,B10001,B10001,B10001,B10001,B11111,B00000}; // Empty progress bar segment
-byte filledBarChar[8] = {B11111,B11111,B11111,B11111,B11111,B11111,B11111,B00000}; // Filled progress bar segment
+// byte emptyBarChar[8] = {B11111,B10001,B10001,B10001,B10001,B10001,B11111,B00000}; // Empty progress bar segment
+// byte filledBarChar[8] = {B11111,B11111,B11111,B11111,B11111,B11111,B11111,B00000}; // Filled progress bar segment
+byte emptyCircle[8] = {0b00000,0b01110,0b10001,0b10001,0b10001,0b10001,0b01110,0b00000}; // Empty circle
+byte filledCircle[8] = {0b00000,0b01110,0b11111,0b11111,0b11111,0b11111,0b01110,0b00000}; // Filled circle
 
 // Keypad setup
 const byte ROWS = 4, COLS = 3;
@@ -259,8 +261,8 @@ void setupLCD() {
     lcd.createChar(2, fingerChar);
     lcd.createChar(3, halfLockChar);    // Half-lock for 2FA waiting
     lcd.createChar(4, errorLockChar);   // Error lock for lockout
-    lcd.createChar(5, emptyBarChar);    // Empty progress bar segment
-    lcd.createChar(6, filledBarChar);   // Filled progress bar segment
+    lcd.createChar(5, emptyCircle);     // Empty circle for PIN input and progress
+    lcd.createChar(6, filledCircle);    // Filled circle for PIN input and progress
 
     displayMessage("  Waking Up...","");
     last_activity = millis();  // Reset activity timer after wake-up
@@ -423,7 +425,7 @@ void IRAM_ATTR handleKeypad() {
             if (getAuthMode() == Config::TWO_FACTOR && !is_fp_locked_out) {
                 displayMessage("PIN Locked Out", String(remainingTime) + "s");
             } else {
-                displayMessage("PIN Locked " + String(remainingTime) + "s", "Use Fingerprint");
+                displayMessage("PIN Locked " + String(remainingTime) + "s", "");
             }
             soundBuzzer(1);
             delay(2000);
@@ -461,16 +463,28 @@ void IRAM_ATTR handleKeypad() {
                 return;
             }
             
-            displayMessage("1:Enroll 2:Del", "3:Auth *:Exit");
+            displayMessage("Menu:", "1:FP 2:Auth *:Exit");
             while (true) {
                 char choice = keypad.getKey();
                 if (choice == '1') {
-                    enrollFingerprint();
+                    // Show FP submenu
+                    displayMessage("1:Enroll 2:Del", "*:Back");
+                    while (true) {
+                        char fpChoice = keypad.getKey();
+                        if (fpChoice == '1') {
+                            enrollFingerprint();
+                            break;
+                        } else if (fpChoice == '2') {
+                            deleteFingerprint();
+                            break;
+                        } else if (fpChoice == '*') {
+                            displayMessage("Menu:", "1:FP 2:Auth *:Exit");
+                            break;
+                        }
+                        delay(10);
+                    }
                     break;
                 } else if (choice == '2') {
-                    deleteFingerprint();
-                    break;
-                } else if (choice == '3') {
                     // Toggle authentication mode
                     Config::AuthMode currentMode = getAuthMode();
                     Config::AuthMode newMode = currentMode == Config::SINGLE_FACTOR ? Config::TWO_FACTOR : Config::SINGLE_FACTOR;
@@ -512,7 +526,6 @@ void handleInactivity() {
         
         // If another 5 seconds pass with no activity, go to deep sleep
         if (millis() - last_activity > Config::INACTIVITY_TIME + 5000) {
-            // Prepare for deep sleep
             displayMessage("Enter Sleep", "Mode...");
             delay(1000);
             lcd.noBacklight();
@@ -527,11 +540,9 @@ void handleInactivity() {
                 rtc_gpio_set_level((gpio_num_t)pin, 1);
                 rtc_gpio_hold_en((gpio_num_t)pin);
             }
-            
-            // Configure row pins (RTC-capable) for wake-up with strong pull-down
+
+            // Configure row pins for keypad wake-up
             const uint64_t row_pin_mask = (1ULL << 32) | (1ULL << 33) | (1ULL << 25) | (1ULL << 26);
-            
-            // Configure each row pin using RTC GPIO functions
             for (uint8_t pin : {32, 33, 25, 26}) {
                 rtc_gpio_init((gpio_num_t)pin);
                 rtc_gpio_set_direction((gpio_num_t)pin, RTC_GPIO_MODE_INPUT_ONLY);
@@ -540,10 +551,10 @@ void handleInactivity() {
                 rtc_gpio_hold_en((gpio_num_t)pin);
             }
             
-            // Enable wake-up on row pins going HIGH (when any key is pressed)
-            esp_sleep_enable_ext1_wakeup(row_pin_mask, ESP_EXT1_WAKEUP_ANY_HIGH);
+            // Enable both wake-up sources: GPIO23 (EXT0) and keypad rows (EXT1)
+            esp_sleep_enable_ext0_wakeup((gpio_num_t)PinConfig::WAKE_PIN, 1); // GPIO23 wake on HIGH
+            esp_sleep_enable_ext1_wakeup(row_pin_mask, ESP_EXT1_WAKEUP_ANY_HIGH); // Keypad wake on ANY HIGH
             
-            // Keep RTC peripherals powered
             esp_sleep_pd_config(ESP_PD_DOMAIN_RTC_PERIPH, ESP_PD_OPTION_ON);
             
             Serial.println("Entering deep sleep...");
@@ -572,8 +583,15 @@ void displayMaskedInput() {
         lcd.clear();
         lcd.setCursor(0, 0);
         lcd.print("      PIN:");
-        lcd.setCursor(5, 1);
-        for(int i = 0; i < input_length; i++) lcd.print("*");
+        lcd.setCursor(4, 1);
+        // Display empty circles for remaining spaces
+        for(int i = 0; i < Config::PIN_LENGTH; i++) {
+            if (i < input_length) {
+                lcd.write(6);  // Filled circle character
+            } else {
+                lcd.write(5);  // Empty circle character
+            }
+        }
         lastInput = currentInput;
     }
 }
@@ -686,12 +704,12 @@ void showReadyScreen() {
         lcd.print("P:");
         // Display three segments for PIN progress
         for (int i = 0; i < 3; i++) {
-            lcd.write(pin_verified ? 6 : 5);  // filled or empty progress bar segment
+            lcd.write(pin_verified ? 6 : 5);  // filled or empty circle for progress indicator
         }
         lcd.print(" F:");
         // Display three segments for Fingerprint progress
         for (int i = 0; i < 3; i++) {
-            lcd.write(fingerprint_verified ? 6 : 5);  // filled or empty progress bar segment
+            lcd.write(fingerprint_verified ? 6 : 5);  // filled or empty circle for progress indicator
         }
     }
 }
@@ -769,7 +787,14 @@ String getInput(String prompt, char confirmKey, char clearKey, bool maskInput) {
     String input = "";
     lcd.clear();
     lcd.print(prompt);
-    lcd.setCursor(0, 1);
+    lcd.setCursor(4, 1);
+    
+    if (maskInput) {
+        // Display initial empty circles for PIN entry
+        for(int i = 0; i < Config::PIN_LENGTH; i++) {
+            lcd.write(5);  // Empty circle character
+        }
+    }
 
     while (true) {
         char key = keypad.getKey();
@@ -777,13 +802,33 @@ String getInput(String prompt, char confirmKey, char clearKey, bool maskInput) {
             if (key == confirmKey) break;
             if (key == clearKey) {
                 input = "";
-                lcd.setCursor(0, 1);
-                lcd.print("                ");  // Clear line
-                lcd.setCursor(0, 1);
-            } else {
+                lcd.setCursor(4, 1);
+                if (maskInput) {
+                    // Reset to empty circles for PIN
+                    for(int i = 0; i < Config::PIN_LENGTH; i++) {
+                        lcd.write(5);  // Empty circle character
+                    }
+                } else {
+                    // Clear the line for fingerprint ID
+                    lcd.print("      ");
+                }
+                lcd.setCursor(4, 1);
+            } else if (input.length() < Config::PIN_LENGTH) {
                 input += key;
-                String displayChar = String(maskInput ? '*' : key);
-                lcd.print(displayChar);
+                lcd.setCursor(4, 1);
+                if (maskInput) {
+                    // Update display with filled and empty circles for PIN
+                    for(int i = 0; i < Config::PIN_LENGTH; i++) {
+                        if (i < input.length()) {
+                            lcd.write(6);  // Filled circle character
+                        } else {
+                            lcd.write(5);  // Empty circle character
+                        }
+                    }
+                } else {
+                    // Show actual number for fingerprint ID
+                    lcd.print(input);
+                }
             }
         }
         delay(10);
@@ -869,7 +914,7 @@ void IRAM_ATTR checkPassword() {
             if (getAuthMode() == Config::TWO_FACTOR && !is_fp_locked_out) {
                 displayMessage("PIN Locked Out", String(remainingTime) + "s");
             } else {
-                displayMessage("PIN Locked " + String(remainingTime) + "s", "Use Fingerprint");
+                displayMessage("PIN Locked " + String(remainingTime) + "s", "");
             }
             soundBuzzer(1);
             delay(2000);
@@ -935,9 +980,9 @@ void IRAM_ATTR checkPassword() {
             portEXIT_CRITICAL(&mux);
             // Even when PIN is locked, show a message indicating fingerprint is still available
             if (getAuthMode() == Config::TWO_FACTOR && !is_fp_locked_out) {
-                displayMessage("PIN Locked 30s", "Use Fingerprint");
+                displayMessage("PIN Locked 30s", "");
             } else {
-                displayMessage("PIN Locked 30s", "PIN Locked 30s");
+                displayMessage("PIN Locked 30s", "");
             }
             soundBuzzer(3); // Use alarm sound
             delay(2000);
@@ -980,9 +1025,21 @@ void changePassword() {
     }
     
     String newPassword = getInput("    New PIN:", '#', '*', true);
-    (newPassword.length() > 0 && newPassword.length() <= Config::PIN_LENGTH) ?
-        (setPassword(newPassword), displayMessage("  PIN Updated","",2000)) :
+    if (newPassword.length() == 0 || newPassword.length() > Config::PIN_LENGTH) {
         displayMessage("   PIN Error","   No Change",2000);
+        showReadyScreen();
+        return;
+    }
+
+    String confirmPassword = getInput("Confirm New PIN:", '#', '*', true);
+    if (newPassword != confirmPassword) {
+        displayMessage("PINs Don't Match", "No Change", 2000);
+        showReadyScreen();
+        return;
+    }
+    
+    setPassword(newPassword);
+    displayMessage("  PIN Updated","",2000);
     
     last_activity = millis();
     showReadyScreen();
