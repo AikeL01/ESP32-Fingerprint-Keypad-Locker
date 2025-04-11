@@ -14,7 +14,7 @@ A secure electronic locker system with dual-factor authentication powered by ESP
   - Configurable lockout duration (30s default)
   - Masked PIN input with visual feedback
 - **Power Management**:
-  - Deep sleep mode with wake-on-keypad
+  - Deep sleep mode with wake-on-keypad/finger
   - Auto-dimming display
 - **Management Features**:
   - Fingerprint enrollment/deletion
@@ -28,7 +28,7 @@ A secure electronic locker system with dual-factor authentication powered by ESP
 | Component | ESP32 Pin | Notes |
 |-----------|----------|-------|
 | Relay | GPIO13 | Controls lock mechanism |
-| Fingerprint Sensor | RX:GPIO16, TX:GPIO17 | ZA620_M5 or similar |
+| Fingerprint Sensor | RX:GPIO16, TX:GPIO17 |
 | Buzzer | GPIO4 | PWM capable pin |
 | Keypad Rows | GPIO32,33,25,26 | 4x3 matrix |
 | Keypad Columns | GPIO27,14,12 | 4x3 matrix |
