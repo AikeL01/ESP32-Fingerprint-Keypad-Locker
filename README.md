@@ -2,7 +2,7 @@
 
 A secure, reliable electronic locker system powered by ESP32 with fingerprint and keypad authentication.
 
-![Locker System](https://raw.githubusercontent.com/AikeL01/ESP32-Fingerprint-Keypad-Locker/refs/heads/main/images/preview.png)
+![Locker System](https://raw.githubusercontent.com/AikeL01/ESP32-Fingerprint-Keypad-Locker/refs/heads/main/preview.png)
 
 ## ✨ Features
 
