@@ -6,7 +6,7 @@ A secure, reliable electronic locker system powered by ESP32 with fingerprint an
 
 ## ✨ Features
 
-- **Dual Authentication**: Fingerprint sensor (ZA620_M5) and keypad options
+- **Dual Authentication**: Fingerprint sensor (ZW101) and keypad options
 - **LCD Display**: Real-time status and feedback via I2C LCD
 - **Security Features**: 
   - Lockout after multiple failed attempts
