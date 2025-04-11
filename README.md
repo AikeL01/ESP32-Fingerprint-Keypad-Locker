@@ -1,4 +1,4 @@
-# 🔒 ESP32 Biometric Locker System V3
+# 🔒 Biometric Personal Locker System: Fingerprint and PIN
 
 A secure electronic locker system with dual-factor authentication powered by ESP32, featuring fingerprint and PIN verification.
 
