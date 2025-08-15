@@ -1,6 +1,6 @@
 ![Locker System](https://raw.githubusercontent.com/AikeL01/ESP32-Fingerprint-Keypad-Locker/refs/heads/main/preview1.png)
 
-## ✨ Features
+## Features
 
 - **Dual Authentication Modes**:
   - Single-factor (PIN or Fingerprint)
