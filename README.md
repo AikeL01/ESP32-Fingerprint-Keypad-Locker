@@ -19,7 +19,7 @@
 - **Audible Feedback**:
   - Distinct sound patterns for success/failure/warning
 
-## 🛠️ Hardware Configuration
+## Hardware Configuration
 
 | Component | ESP32 Pin | Notes |
 |-----------|----------|-------|
@@ -31,7 +31,7 @@
 | LCD | I2C 0x27 | 16x2 character display |
 | Wake Pin | GPIO36 | Fingerprint interrupt |
 
-## 📋 System Configuration
+## System Configuration
 
 ```cpp
 // Key parameters from LOCKER_V3.cpp
